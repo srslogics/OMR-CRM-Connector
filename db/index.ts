@@ -9,7 +9,7 @@ class Statement {
 }
 const schema=process.env.SRS_DB_SCHEMA||'srs_records';
 if(!/^[a-z_][a-z0-9_]*$/.test(schema))throw new Error('Invalid database schema');
-const tables=['ownership','members','records','auth_accounts','auth_sessions','auth_attempts'];
+const tables=['ownership','members','records','auth_accounts','auth_sessions','auth_attempts','activity_log'];
 export function getDb(){return {
  prepare(sql:string){let n=0;let text=sql.replace(/\?/g,()=>`$${++n}`);for(const table of tables)text=text.replace(new RegExp(`\\b(FROM|JOIN|INTO|UPDATE)\\s+${table}\\b`,'gi'),`$1 ${schema}.${table}`);return new Statement(text)},
  async batch(statements:Statement[]){const client=await getPool().connect();try{await client.query('BEGIN');const results=[];for(const s of statements)results.push(await client.query(s.sql,s.values));await client.query('COMMIT');return results}catch(e){await client.query('ROLLBACK');throw e}finally{client.release()}}
