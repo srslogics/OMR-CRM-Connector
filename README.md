@@ -1,6 +1,10 @@
-# vinext-starter
+# OMR-CRM-Connector
 
-A clean full-stack starter running on [vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and Drizzle support.
+SRS Records is a student data-entry platform with owner-managed phone/password login, intern accounts, record review, and CSV exports. Fields include student name, school, father’s number, mother’s number, and class.
+
+The current application uses Cloudflare D1. Supabase connectivity has been tested separately but is not yet wired into application storage.
+
+Built on [vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and Drizzle support.
 
 ## Prerequisites
 
