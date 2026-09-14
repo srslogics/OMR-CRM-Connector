@@ -1,0 +1,5 @@
+import { getChatGPTUser,chatGPTSignInPath } from '../chatgpt-auth';
+import { authDb,OWNER_EMAIL,OWNER_PHONE } from '../auth';
+import Login from '../login';
+export const dynamic='force-dynamic';
+export default async function OwnerSetup(){const owner=await authDb().prepare("SELECT id FROM auth_accounts WHERE role='owner'").first();if(owner)return <main><h1>Owner account is ready</h1><p>Use your mobile number and password to sign in.</p><a className="primary mt-6" href="/">Go to login</a></main>;const identity=await getChatGPTUser();if(!identity)return <main><h1>Verify owner access</h1><p>Sign in once with the site owner’s ChatGPT account to securely create the owner password.</p><a className="primary mt-6" href={chatGPTSignInPath('/owner-setup')} target="_top">Verify owner account</a></main>;if(identity.email.toLowerCase()!==OWNER_EMAIL)return <main><h1>Owner access required</h1><p>Only the site owner can set up this account.</p><a href="/">Return to login</a></main>;return <Login setup phone={OWNER_PHONE}/>}
