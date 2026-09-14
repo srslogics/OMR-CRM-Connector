@@ -1,4 +1,4 @@
-# SRS Records — OMR CRM Connector
+# LakshyaInstitute — Student Workspace
 
 Student data entry with owner-managed phone/password accounts. Interns enter student name, school, father’s number, mother’s number, and class. The owner reviews all submissions and downloads filtered CSV files.
 
@@ -42,3 +42,7 @@ For local form requests set `APP_URL` to the exact origin used in the browser, e
 The production Next.js build passes TypeScript checks. Integration checks against an isolated PostgreSQL schema cover owner setup restrictions, phone login, wrong passwords, role enforcement, password resets, session revocation, logout, record submission/review, and filtered CSV exports.
 
 Secrets and local test state are excluded from Git. Legacy Sites/Vinext files remain for source history but are not used by the Render build or server.
+
+## WhatsApp sharing
+
+The public `/opengraph-image` endpoint provides the 1200×630 PNG link preview. Metadata uses `RENDER_EXTERNAL_URL` automatically; set `APP_URL` to your canonical HTTPS origin when using a custom domain. Student data and authentication remain protected.
