@@ -18,3 +18,5 @@ CREATE UNIQUE INDEX IF NOT EXISTS single_session_per_account ON srs_records.auth
 CREATE TABLE IF NOT EXISTS srs_records.activity_log(id bigserial PRIMARY KEY,actor_id text,actor_name text NOT NULL,event text NOT NULL,created_at timestamptz NOT NULL DEFAULT now());
 CREATE INDEX IF NOT EXISTS activity_log_created ON srs_records.activity_log(created_at DESC);
 REVOKE ALL ON srs_records.activity_log FROM PUBLIC;
+
+ALTER TABLE srs_records.records ADD COLUMN IF NOT EXISTS marks numeric;
