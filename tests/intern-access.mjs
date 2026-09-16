@@ -14,10 +14,11 @@ for(const path of ['/api/workspace','/api/workspace?q=Test&class=10']){const r=a
 assert.equal((await request('/api/workspace?export=csv',null,intern.cookie)).status,403);
 assert.equal((await request('/api/workspace',{...record,name:'Unauthorized edit'},intern.cookie)).status,403);
 assert.equal((await request('/api/workspace',{action:'review',id:record.id,status:'Reviewed'},intern.cookie)).status,403);
-const visible=await request('/api/workspace',null,owner.cookie);assert.equal(visible.data.records.length,1);assert.equal(visible.data.records[0].name,'Test Student');assert.equal(Number(visible.data.records[0].marks),87.5);
+const visible=await request('/api/workspace',null,owner.cookie);assert.equal(visible.data.records.length,1);assert.equal(visible.data.records[0].name,'Test Student');assert.deepEqual(visible.data.schools,['Test School']);assert.equal(Number(visible.data.records[0].marks),87.5);
 assert.equal((await request('/api/workspace',{...record,id:crypto.randomUUID(),marks:'invalid'},intern.cookie)).status,400);
-assert.equal((await request('/api/workspace',{...record,name:'Owner correction',marks:0},owner.cookie)).status,200);
-const csv=await request('/api/workspace?export=csv',null,owner.cookie);assert.equal(csv.status,200);assert.ok(csv.data.includes('Owner correction'));assert.ok(csv.data.includes('Marks'));assert.ok(csv.data.includes('"0"'));
+assert.equal((await request('/api/workspace',{...record,name:'Owner correction',marks:0,school:'  test   SCHOOL  '},owner.cookie)).status,200);
+const csv=await request('/api/workspace?export=csv',null,owner.cookie);assert.equal(csv.status,200);assert.ok(csv.data.includes('Owner correction'));assert.ok(csv.data.includes('Marks'));assert.ok(csv.data.includes('Test School'));assert.ok(csv.data.includes('"0"'));
 assert.equal((await request('/api/workspace',{...record,marks:''},owner.cookie)).status,200);assert.equal((await request('/api/workspace',null,owner.cookie)).data.records[0].marks,null);
+assert.deepEqual((await request('/api/workspace',null,intern.cookie)).data.schools,['Test School']);
 assert.equal((await request('/api/workspace')).status,401);
 console.log('PASS: intern submission, no saved lead retrieval, export/edit/review denied, owner read/edit/export, anonymous denied.');

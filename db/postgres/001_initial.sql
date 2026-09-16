@@ -20,3 +20,10 @@ CREATE INDEX IF NOT EXISTS activity_log_created ON srs_records.activity_log(crea
 REVOKE ALL ON srs_records.activity_log FROM PUBLIC;
 
 ALTER TABLE srs_records.records ADD COLUMN IF NOT EXISTS marks numeric;
+
+CREATE TABLE IF NOT EXISTS srs_records.schools(name_key text PRIMARY KEY,name text NOT NULL);
+INSERT INTO srs_records.schools(name_key,name)
+SELECT DISTINCT ON (lower(trim(regexp_replace(school,'\s+',' ','g')))) lower(trim(regexp_replace(school,'\s+',' ','g'))),trim(regexp_replace(school,'\s+',' ','g')) FROM srs_records.records
+WHERE trim(school)<>'' ORDER BY lower(trim(regexp_replace(school,'\s+',' ','g'))),created_at,id
+ON CONFLICT(name_key) DO NOTHING;
+REVOKE ALL ON srs_records.schools FROM PUBLIC;
