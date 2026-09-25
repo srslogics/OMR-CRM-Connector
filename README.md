@@ -46,3 +46,18 @@ Secrets and local test state are excluded from Git. Legacy Sites/Vinext files re
 ## WhatsApp sharing
 
 The public `/opengraph-image` endpoint provides the 1200×630 PNG link preview. Metadata uses `RENDER_EXTERNAL_URL` automatically; set `APP_URL` to your canonical HTTPS origin when using a custom domain. Student data and authentication remain protected.
+
+## PaperDesk — paper evaluation software
+
+The [PaperDesk application](paperdesk/README.md) is included in `paperdesk/` as a separate Python service. It provides combined-PDF processing, class-specific answer keys and templates, local OCR and answer-mark detection, staff review, and approved Excel/CSV/PDF results.
+
+To run it locally with Python 3.11+:
+
+```sh
+cd paperdesk
+./start.sh
+```
+
+Open http://127.0.0.1:4180, create the administrator account, and try the built-in synthetic sample batch. See its [validation record](paperdesk/VALIDATION.md) for tested behavior and remaining real-paper validation.
+
+PaperDesk has its own login and local SQLite/file storage. It is not yet connected to the CRM database or accounts. The root Node/Render deployment continues to serve the existing CRM; deploying PaperDesk requires a separate Python/container service with a persistent disk, as described in its run guide. Student PDFs, credentials, local databases, and test runtime state are not included.
