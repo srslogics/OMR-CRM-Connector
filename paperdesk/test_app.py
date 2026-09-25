@@ -10,6 +10,16 @@ import pymupdf as fitz
 import cv2
 
 class Integration(unittest.TestCase):
+ def test_public_monitor_head(self):
+  with TestClient(app) as client:
+   head=client.head('/')
+   page=client.get('/')
+   self.assertEqual(head.status_code,200)
+   self.assertEqual(head.content,b'')
+   self.assertEqual(head.headers['content-type'],page.headers['content-type'])
+   self.assertEqual(head.headers['content-length'],page.headers['content-length'])
+   self.assertEqual(client.head('/').headers['x-content-type-options'],'nosniff')
+   self.assertEqual(client.get('/api/dashboard').status_code,401)
  def test_workflow(self):
   with TestClient(app) as client:
    self.assertEqual(client.get('/api/dashboard').status_code,401)

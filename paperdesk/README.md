@@ -67,3 +67,7 @@ The preview is local. This processing service cannot be hosted as a static site.
 ```
 
 Tests use isolated temporary storage and generated papers. They verify login, protected media, cross-origin rejection, immutable keys, odd-page rejection, mark reading, ambiguous answer handling, scoring, review gates, conflict handling, exports and audit records. `requirements.lock.txt` records the development environment.
+
+## Uptime monitoring
+
+Use an HTTP(S) monitor with URL `https://YOUR-SERVICE.onrender.com/`. The public homepage supports both GET and HEAD, so UptimeRobot’s default HEAD check works without changing the method. This checks HTTP availability only; it does not verify completion of paper processing or preserve data on Render Free.

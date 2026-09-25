@@ -317,7 +317,7 @@ def marksheet(id:str,request:Request):
     c.setFont(font,9);c.drawString(42,40,'Reviewed result | PaperDesk by SrS Logics');c.save()
     return Response(out.getvalue(),media_type='application/pdf',headers={'Content-Disposition':'attachment; filename="marksheet.pdf"'})
 
-@app.get('/')
+@app.api_route('/', methods=['GET', 'HEAD'])
 def home():return FileResponse(ROOT/'static'/'index.html')
 
 @app.post('/api/sample')
