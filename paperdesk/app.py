@@ -175,8 +175,8 @@ async def upload_batch(request:Request,exam_id:str=Form(...),file:UploadFile=Fil
     user(request);e=require_row('exams',exam_id)
     if not e['locked']:raise HTTPException(400,'Verify and lock the exam first.')
     id=uuid.uuid4().hex;folder=DATA/'batches'/id;folder.mkdir(parents=True);n=await save_upload(file,folder/'source.pdf')
-    if n<2 or n>600 or n%2:
-        (folder/'source.pdf').unlink();raise HTTPException(400,'Use an even page count between 2 and 600. Each student must have two consecutive pages.')
+    if n<2 or n>30 or n%2:
+        (folder/'source.pdf').unlink();raise HTTPException(400,'MVP limit: maximum 15 students (30 pages) per batch. Use 2 to 30 pages, with two consecutive pages per student.')
     with db() as c:c.execute('INSERT INTO batches VALUES(?,?,?,?,?,0,?,?,?)',(id,exam_id,Path(file.filename or 'Batch.pdf').name[:150],n,n//2,'queued','',time.time()))
     wake.set();return {'id':id}
 

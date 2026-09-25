@@ -36,7 +36,7 @@ Expected provisional scores: first student 100; second 76; third 92 with one bla
 2. Enter all 25 answers from the official key.
 3. Upload a blank two-page PDF master. Map each answer region in A/B/C/D order by dragging rectangles on the scan. Include enough margin for a tick, while excluding neighbouring answers. Map handwritten student fields on page 1 if using OCR.
 4. Save and verify the map and key. Lock the exam. Locked settings cannot change; create a new exam for another key or layout.
-5. Upload a combined PDF: two consecutive pages per student, no covers. Limits: 600 pages/300 students, 150 MB. Odd page counts, encrypted or invalid PDFs are rejected.
+5. Upload a combined PDF: two consecutive pages per student, no covers. Limits: 30 pages/15 students (MVP), 150 MB. Odd page counts, encrypted or invalid PDFs are rejected.
 6. Processing runs in a persistent queue on the server, one student at a time. Closing the browser does not stop it. Unprocessed work resumes after restart. A failed batch can be retried without overwriting reviewed papers.
 7. Review each paper. The aligned scan and original PDF are available. Uncertain marks remain `?`; blanks use `-`. All papers require an explicit student-detail and page-pairing check before approval. Corrections have an audit record; concurrent edits cannot silently overwrite each other.
 8. Download approved results as Excel/CSV and individual PDF marksheets.
@@ -51,7 +51,7 @@ Scoring: Q1–10 Science /40, Q11–20 Mathematics /40, Q21–25 Mental Ability 
 - Perspective alignment is supported. Strong page curl, erasures, photocopy noise, shifted printing and handwritten corrections are not reliably resolved automatically. There is no accuracy guarantee or confidence calibration on the client's papers yet.
 - Sequential pairing cannot establish ownership of an unlabelled second page if same-format pages are mixed. Staff must verify pairing. Future papers should include a student/page ID on every page.
 - The official answer key and representative combined client PDF have not been supplied. Templates from the client's photographs have not been pre-calibrated, and no real student scores are seeded.
-- Automated integration checks cover a synthetic three-student batch; full 300-student processing time, scan variation and memory/disk sizing must be measured before production use.
+- Automated integration checks cover a synthetic three-student batch; the MVP permits up to 15 students per batch. Start with 10; scan variation and Render Free performance still require client validation.
 
 ## Storage and deployment
 

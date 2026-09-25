@@ -65,6 +65,21 @@ class Integration(unittest.TestCase):
    self.assertIn('First Test',csv);self.assertNotIn('Second Test',csv)
    self.assertTrue(client.get('/api/papers/'+first['id']+'/marksheet').content.startswith(b'%PDF'))
    with db() as c:self.assertEqual(c.execute('SELECT count(*) FROM audit').fetchone()[0],1)
+   # Exercise both sides of the MVP batch limit through the upload API.
+   oversized=Path(TEST_DIR.name)/'sixteen.pdf';create_pdf(oversized,[f'Limit Test {i}' for i in range(16)])
+   rejected=client.post('/api/batches',data={'exam_id':eid},files={'file':('sixteen.pdf',oversized.read_bytes(),'application/pdf')})
+   self.assertEqual(rejected.status_code,400)
+   self.assertIn('15 students',rejected.json()['detail'])
+   fifteen=Path(TEST_DIR.name)/'fifteen.pdf';create_pdf(fifteen,[f'Limit Test {i}' for i in range(15)])
+   accepted=client.post('/api/batches',data={'exam_id':eid},files={'file':('fifteen.pdf',fifteen.read_bytes(),'application/pdf')})
+   self.assertEqual(accepted.status_code,200,accepted.text)
+   limit_id=accepted.json()['id'];deadline=time.time()+120
+   while time.time()<deadline:
+    limit_batch=client.get(f'/api/batches/{limit_id}').json()
+    if limit_batch['status'] in ('ready','failed'):break
+    time.sleep(.2)
+   self.assertEqual(limit_batch['status'],'ready',limit_batch)
+   self.assertEqual(len(limit_batch['papers']),15)
    client.post('/api/logout');self.assertEqual(client.get('/media/papers/'+first['id']+'/0.png').status_code,401)
    self.assertEqual(client.post('/api/login',json={'email':'operator@example.test','password':'wrong'}).status_code,401)
    self.assertEqual(client.post('/api/login',json={'email':'operator@example.test','password':'long-test-password'}).status_code,200)
