@@ -4,6 +4,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
+RUN python setup_ocr.py
 RUN useradd --create-home paperdesk && mkdir -p /var/lib/paperdesk && chown paperdesk /var/lib/paperdesk
 USER paperdesk
 ENV PAPERDESK_DATA=/var/lib/paperdesk

@@ -3,4 +3,5 @@ set -eu
 cd "$(dirname "$0")"
 if [ ! -d .venv ]; then python3 -m venv .venv; fi
 .venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python setup_ocr.py
 exec .venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port "${PORT:-4180}" --workers 1

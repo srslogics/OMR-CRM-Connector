@@ -7,29 +7,39 @@ import pymupdf as fitz
 
 FIELDS=['name','school','class','section','taluka','district','father_mobile','mother_mobile']
 
-def raster(page):
-    pix=page.get_pixmap(matrix=fitz.Matrix(1.7,1.7),alpha=False)
+def raster(page, zoom=1.7):
+    pix=page.get_pixmap(matrix=fitz.Matrix(zoom,zoom),alpha=False)
     rgb=np.frombuffer(pix.samples,np.uint8).reshape(pix.height,pix.width,3)
     return cv2.cvtColor(rgb,cv2.COLOR_RGB2BGR)
 
-def align(image, template):
+def align(image, template, return_transform=False):
     """Return aligned pixels only when there is sufficient geometric evidence."""
+    def result(pixels, quality, transform=None):
+        return (pixels,quality,transform) if return_transform else (pixels,quality)
     orb=cv2.ORB_create(6000)
     k1,d1=orb.detectAndCompute(cv2.cvtColor(image,cv2.COLOR_BGR2GRAY),None)
     k2,d2=orb.detectAndCompute(cv2.cvtColor(template,cv2.COLOR_BGR2GRAY),None)
-    if d1 is None or d2 is None:return None,0
+    if d1 is None or d2 is None:return result(None,0)
     matches=cv2.BFMatcher(cv2.NORM_HAMMING).knnMatch(d1,d2,k=2)
     good=[m[0] for m in matches if len(m)==2 and m[0].distance<.72*m[1].distance]
-    if len(good)<18:return None,0
+    if len(good)<18:return result(None,0)
     a=np.float32([k1[m.queryIdx].pt for m in good]); b=np.float32([k2[m.trainIdx].pt for m in good])
     H,mask=cv2.findHomography(a,b,cv2.RANSAC,3.5)
     quality=float(mask.mean()) if mask is not None else 0
-    if H is None or quality<.45 or int(mask.sum())<16:return None,quality
+    if H is None or quality<.45 or int(mask.sum())<16:return result(None,quality)
     ih,iw=image.shape[:2]; th,tw=template.shape[:2]
     corners=cv2.perspectiveTransform(np.float32([[[0,0],[iw,0],[iw,ih],[0,ih]]]),H)[0]
     area=abs(cv2.contourArea(corners)); expected=th*tw
-    if not .55<area/expected<1.7 or not cv2.isContourConvex(corners):return None,quality
-    return cv2.warpPerspective(image,H,(tw,th),borderValue=(255,255,255)),quality
+    if not .55<area/expected<1.7 or not cv2.isContourConvex(corners):return result(None,quality)
+    return result(cv2.warpPerspective(image,H,(tw,th),borderValue=(255,255,255)),quality,H)
+
+def detail_pixels(page, low_image, template, transform):
+    """Reuse validated registration while retaining more handwriting pixels."""
+    high=raster(page,3.4)
+    ih,iw=low_image.shape[:2];hh,hw=high.shape[:2];th,tw=template.shape[:2]
+    scaled=np.diag([2.,2.,1.]) @ transform @ np.diag([iw/hw,ih/hh,1.])
+    pixels=cv2.warpPerspective(high,scaled,(tw*2,th*2),borderValue=(255,255,255))
+    return pixels,cv2.resize(template,(tw*2,th*2))
 
 def crop(im,r):
     h,w=im.shape[:2];x,y,rw,rh=r

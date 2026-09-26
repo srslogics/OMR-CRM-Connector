@@ -7,7 +7,9 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 import cv2
 import pymupdf as fitz
-from processor import raster,align,detect_question,ocr_crop,score,validate_config,FIELDS,ocr_available
+from processor import raster,align,detail_pixels,detect_question,score,validate_config,FIELDS,ocr_available,crop
+from student_details import extract_details,empty_reading,normalise_reviews,details_ready,evidence_rect
+from setup_ocr import MODEL
 
 ROOT=Path(__file__).parent
 DATA=Path(os.environ.get('PAPERDESK_DATA',ROOT/'data')).resolve();DATA.mkdir(parents=True,exist_ok=True)
@@ -72,7 +74,7 @@ def session(request:Request):
     with db() as c:setup=c.execute('SELECT count(*) FROM users').fetchone()[0]==0
     try:u=user(request)
     except HTTPException:u=None
-    return {'setup_required':setup,'user':u,'ocr_available':ocr_available()}
+    return {'setup_required':setup,'user':u,'ocr_available':ocr_available(),'student_ocr_enhanced':MODEL.exists()}
 
 @app.post('/api/setup')
 async def setup(request:Request):
@@ -105,6 +107,8 @@ def dashboard(request:Request):
     with db() as c:
         exams=[dict(r) for r in c.execute('SELECT id,name,class_name,locked,created FROM exams ORDER BY created DESC')]
         batches=[dict(r) for r in c.execute('SELECT b.*,e.name exam_name,e.class_name,(SELECT count(*) FROM papers p WHERE p.batch_id=b.id AND p.status="approved") approved FROM batches b JOIN exams e ON e.id=b.exam_id ORDER BY b.created DESC')]
+        for batch in batches:
+            batch['approved']=sum(details_ready(json.loads(row['data'])) for row in c.execute('SELECT data FROM papers WHERE batch_id=? AND status="approved"',(batch['id'],)))
     return {'exams':exams,'batches':batches}
 
 @app.post('/api/exams')
@@ -186,7 +190,7 @@ def batch(id:str,request:Request):
     with db() as c:rows=c.execute('SELECT * FROM papers WHERE batch_id=? ORDER BY idx',(id,)).fetchall()
     b['papers']=[]
     for row in rows:
-        p=dict(row);p['data']=json.loads(p['data']);b['papers'].append(p)
+        p=paper_payload(dict(row));b['papers'].append(p)
     return b
 
 @app.post('/api/batches/{id}/retry')
@@ -198,7 +202,12 @@ def retry(id:str,request:Request):
 
 @app.get('/api/papers/{id}')
 def paper(id:str,request:Request):
-    user(request);p=require_row('papers',id);p['data']=json.loads(p['data']);b=require_row('batches',p['batch_id']);e=require_row('exams',b['exam_id']);p['exam']=dict(e,config=json.loads(e['config']));return p
+    user(request);p=paper_payload(require_row('papers',id));b=require_row('batches',p['batch_id']);e=require_row('exams',b['exam_id']);p['exam']=dict(e,config=json.loads(e['config']));return p
+
+def paper_payload(p):
+    p['data']=json.loads(p['data']);p['details_ready']=details_ready(p['data'])
+    if p['status']=='approved' and not p['details_ready']:p['status']='review'
+    return p
 
 @app.put('/api/papers/{id}')
 async def review(id:str,request:Request):
@@ -208,12 +217,58 @@ async def review(id:str,request:Request):
     fields={k:str(fields.get(k,'')).strip()[:180] for k in FIELDS}
     approve=incoming.get('approve') is True
     if approve and ('?' in answers or not fields['name'] or incoming.get('pairing_verified') is not True):raise HTTPException(400,'Resolve every answer, enter the student name and verify page pairing before approval.')
-    e=require_row('exams',require_row('batches',p['batch_id'])['exam_id']);new={**old,'answers':answers,'fields':fields,'score':score(answers,json.loads(e['config'])['key']),'pairing_verified':bool(incoming.get('pairing_verified'))}
+    try:reviews=normalise_reviews(incoming.get('field_review',old.get('field_review',{})),fields)
+    except ValueError as error:raise HTTPException(400,str(error))
+    e=require_row('exams',require_row('batches',p['batch_id'])['exam_id']);new={**old,'answers':answers,'fields':fields,'field_review':reviews,'score':score(answers,json.loads(e['config'])['key']),'pairing_verified':incoming.get('pairing_verified') is True}
+    if approve and not details_ready(new):raise HTTPException(400,'Check all 8 student fields. Confirm each value, or mark it blank or unreadable, before approving.')
     with db() as c:
         cur=c.execute('UPDATE papers SET data=?,status=?,version=version+1 WHERE id=? AND version=?',(json.dumps(new),'approved' if approve else 'review',id,incoming.get('version')))
         if cur.rowcount!=1:raise HTTPException(409,'This paper changed in another window. Reload before saving.')
         c.execute('INSERT INTO audit(paper_id,user_id,at,before_data,after_data) VALUES(?,?,?,?,?)',(id,u['id'],time.time(),p['data'],json.dumps(new)))
     return {'ok':True}
+
+@app.post('/api/papers/{id}/extract-details')
+def reread_details(id:str,request:Request,version:int):
+    u=user(request);p=require_row('papers',id)
+    if p['version']!=version:raise HTTPException(409,'This paper changed. Reload before reading the details again.')
+    b=require_row('batches',p['batch_id']);e=require_row('exams',b['exam_id']);conf=json.loads(e['config']);folder=DATA/'batches'/b['id']
+    master=cv2.imread(str(DATA/'exams'/e['id']/'page-0.png'))
+    with fitz.open(folder/'source.pdf') as doc:
+        page=doc[p['idx']*2];low=raster(page);aligned,quality,transform=align(low,master,True)
+        if aligned is None:raise HTTPException(400,'Page alignment failed. Read the student details from the original PDF.')
+        pixels,reference=detail_pixels(page,low,master,transform)
+        readings=extract_details(pixels,reference,conf.get('fields',{}),folder,p['idx'])
+    old=json.loads(p['data']);new={**old,'field_ocr':readings,'fields':dict(old['fields']),'field_review':dict(old.get('field_review',{}))}
+    for key in FIELDS:
+        # Preserve staff edits, including drafts and confirmed blank/unreadable fields.
+        previous=old.get('field_ocr',{}).get(key,{}).get('suggested')
+        reviewed=old.get('field_review',{}).get(key,{}).get('status') in {'verified','blank','unreadable'}
+        if not reviewed and (not old['fields'].get(key) or (previous is not None and old['fields'][key]==previous)):
+            new['fields'][key]=readings[key]['suggested'];new['field_review'][key]={'status':'pending','value':new['fields'][key]}
+    with db() as c:
+        cur=c.execute('UPDATE papers SET data=?,status="review",version=version+1 WHERE id=? AND version=?',(json.dumps(new),id,version))
+        if cur.rowcount!=1:raise HTTPException(409,'This paper changed while OCR was running. Reload before continuing.')
+        c.execute('INSERT INTO audit(paper_id,user_id,at,before_data,after_data) VALUES(?,?,?,?,?)',(id,u['id'],time.time(),p['data'],json.dumps(new)))
+    return {'ok':True}
+
+@app.get('/media/papers/{id}/fields/{key}.png')
+def field_image(id:str,key:str,request:Request):
+    user(request);p=require_row('papers',id)
+    if key not in FIELDS:raise HTTPException(404)
+    folder=DATA/'batches'/p['batch_id'];path=folder/f"{p['idx']}-field-{key}.png"
+    if path.exists():return FileResponse(path)
+    # Legacy records can show mapped evidence without changing their saved data.
+    d=json.loads(p['data'])
+    if any('Page 1: alignment failed' in flag for flag in d.get('flags',[])):raise HTTPException(404,'Read the original PDF; alignment failed.')
+    e=require_row('exams',require_row('batches',p['batch_id'])['exam_id']);region=json.loads(e['config']).get('fields',{}).get(key)
+    if not region:raise HTTPException(404,'Field not mapped')
+    pixels=cv2.imread(str(folder/f"{p['idx']}-0.png"))
+    if pixels is None:raise HTTPException(404)
+    cut=crop(pixels,evidence_rect(region['box'],pixels.shape))
+    if not cut.size:raise HTTPException(404)
+    success,encoded=cv2.imencode('.png',cut)
+    if not success:raise HTTPException(404)
+    return Response(encoded.tobytes(),media_type='image/png')
 
 @app.get('/media/exams/{id}/{page}.png')
 def master_image(id:str,page:int,request:Request):
@@ -245,9 +300,9 @@ def process_batch(b):
             if stop.is_set():return
             with db() as c:exists=c.execute('SELECT 1 FROM papers WHERE batch_id=? AND idx=?',(b['id'],idx)).fetchone()
             if exists:continue
-            fields={k:'' for k in FIELDS};fields['class']=e['class_name'];answers=['?']*25;details=[{'reason':'Page alignment needs review','evidence':[]} for _ in range(25)];flags=[]
+            readings={k:empty_reading('Page alignment failed or field not mapped. Read the original PDF.') for k in FIELDS};fields={k:'' for k in FIELDS};answers=['?']*25;details=[{'reason':'Page alignment needs review','evidence':[]} for _ in range(25)];flags=[]
             for pageno in range(2):
-                im=raster(doc[idx*2+pageno]);aligned,quality=align(im,masters[pageno])
+                im=raster(doc[idx*2+pageno]);aligned,quality,transform=align(im,masters[pageno],True)
                 if aligned is None:
                     flags.append(f'Page {pageno+1}: alignment failed; check page order and scan quality.')
                     cv2.imwrite(str(folder/f'{idx}-{pageno}.png'),im);continue
@@ -255,10 +310,13 @@ def process_batch(b):
                 for q,m in conf['mapping'].items():
                     if m['page']!=pageno:continue
                     d=detect_question(aligned,masters[pageno],m['boxes']);answers[int(q)-1]=d['answer'];details[int(q)-1]=d
-                for k,m in conf.get('fields',{}).items():
-                    if m['page']==pageno:fields[k]=ocr_crop(aligned,m['box'],folder,k)
+                if pageno==0:
+                    pixels,reference=detail_pixels(doc[idx*2],im,masters[0],transform)
+                    readings=extract_details(pixels,reference,conf.get('fields',{}),folder,idx)
+                    fields={k:readings[k]['suggested'] for k in FIELDS}
+                    del pixels,reference
             flags.append('Verify student details, both pages and all detected answers before approving.')
-            data={'fields':fields,'answers':answers,'details':details,'flags':flags,'pairing_verified':False,'score':score(answers,conf['key'])}
+            data={'fields':fields,'field_ocr':readings,'field_review':{},'answers':answers,'details':details,'flags':flags,'pairing_verified':False,'score':score(answers,conf['key'])}
             with db() as c:
                 c.execute('INSERT INTO papers VALUES(?,?,?,?,?,1)',(uuid.uuid4().hex,b['id'],idx,json.dumps(data),'review'))
                 c.execute('UPDATE batches SET done=(SELECT count(*) FROM papers WHERE batch_id=?) WHERE id=?',(b['id'],b['id']))
@@ -268,11 +326,28 @@ def process_batch(b):
 def export(id:str,kind:str,request:Request):
     user(request);b=require_row('batches',id)
     with db() as c:rows=c.execute('SELECT data,idx FROM papers WHERE batch_id=? AND status="approved" ORDER BY idx',(id,)).fetchall()
-    if not rows:raise HTTPException(400,'Approve at least one paper before exporting.')
+    rows=[r for r in rows if details_ready(json.loads(r['data']))]
+    if not rows:raise HTTPException(400,'Approve at least one paper with all student details checked before exporting.')
     headers=['Student number']+FIELDS+['Science /40','Mathematics /40','Mental ability /20','Total /100','Correct','Blank']+[f'Q{i}' for i in range(1,26)]
     values=[]
     for r in rows:
         d=json.loads(r['data']);s=d['score'];values.append([r['idx']+1]+[d['fields'].get(k,'') for k in FIELDS]+[s['science'],s['mathematics'],s['mental_ability'],s['total'],s['correct'],s['blank']]+d['answers'])
+    return table_download(headers,values,kind,'approved-results','Approved results')
+
+@app.get('/api/batches/{id}/students/{kind}')
+def student_export(id:str,kind:str,request:Request):
+    user(request);require_row('batches',id)
+    with db() as c:rows=c.execute('SELECT id,idx,data FROM papers WHERE batch_id=? ORDER BY idx',(id,)).fetchall()
+    values=[]
+    for row in rows:
+        d=json.loads(row['data'])
+        if not details_ready(d):continue
+        values.append([row['idx']+1,f"{row['idx']*2+1}-{row['idx']*2+2}",row['id']]+[d['fields'].get(k,'') for k in FIELDS]+[d['field_review'][k]['status'] for k in FIELDS])
+    if not values:raise HTTPException(400,'Check all 8 fields, confirm page pairing and save at least one student before exporting details.')
+    headers=['Student number','Source pages','Paper ID']+FIELDS+[f'{k} status' for k in FIELDS]
+    return table_download(headers,values,kind,'verified-student-details','Student details')
+
+def table_download(headers,values,kind,filename,title):
     def safe(v):return "'"+v if isinstance(v,str) and v.startswith(('=','+','-','@','\t','\r')) else v
     values=[[safe(v) for v in r] for r in values]
     if kind=='csv':
@@ -280,7 +355,7 @@ def export(id:str,kind:str,request:Request):
     elif kind=='xlsx':
         from openpyxl import Workbook
         from openpyxl.styles import Font,PatternFill
-        wb=Workbook();ws=wb.active;ws.title='Approved results';ws.append(headers)
+        wb=Workbook();ws=wb.active;ws.title=title;ws.append(headers)
         for r in values:ws.append(r)
         for cell in ws[1]:cell.font=Font(bold=True,color='FFFFFF');cell.fill=PatternFill('solid',fgColor='162C42')
         ws.freeze_panes='B2';ws.auto_filter.ref=ws.dimensions
@@ -288,12 +363,13 @@ def export(id:str,kind:str,request:Request):
         for i in range(1,len(headers)+1):ws.column_dimensions[get_column_letter(i)].width=22 if i<10 else 14
         out=io.BytesIO();wb.save(out);content=out.getvalue();mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     else:raise HTTPException(404)
-    return Response(content,media_type=mime,headers={'Content-Disposition':f'attachment; filename="approved-results.{kind}"'})
+    return Response(content,media_type=mime,headers={'Content-Disposition':f'attachment; filename="{filename}.{kind}"'})
 
 @app.get('/api/papers/{id}/marksheet')
 def marksheet(id:str,request:Request):
     user(request);p=require_row('papers',id)
     if p['status']!='approved':raise HTTPException(400,'Approve this paper first.')
+    if not details_ready(json.loads(p['data'])):raise HTTPException(400,'Confirm all student details before downloading the marksheet.')
     from reportlab.pdfgen import canvas
     from reportlab.lib.colors import HexColor
     from reportlab.pdfbase import pdfmetrics

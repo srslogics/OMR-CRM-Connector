@@ -17,6 +17,7 @@ Or, on any supported platform:
 ```sh
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python setup_ocr.py
 .venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 4180 --workers 1
 ```
 
@@ -34,24 +35,33 @@ Expected provisional scores: first student 100; second 76; third 92 with one bla
 
 1. Create an exam with its name and class. Each class/paper layout has its own template.
 2. Enter all 25 answers from the official key.
-3. Upload a blank two-page PDF master. Map each answer region in A/B/C/D order by dragging rectangles on the scan. Include enough margin for a tick, while excluding neighbouring answers. Map handwritten student fields on page 1 if using OCR.
+3. Upload a blank two-page PDF master. Map each answer region in A/B/C/D order by dragging rectangles on the scan. Include enough margin for a tick, while excluding neighbouring answers. Map all eight student fields on page 1: name, school, class, section, taluka, district, father’s mobile and mother’s mobile. Include the full character boxes; exclude printed field labels. Unmapped fields remain visibly unavailable and need manual entry.
 4. Save and verify the map and key. Lock the exam. Locked settings cannot change; create a new exam for another key or layout.
 5. Upload a combined PDF: two consecutive pages per student, no covers. Limits: 30 pages/15 students (MVP), 150 MB. Odd page counts, encrypted or invalid PDFs are rejected.
 6. Processing runs in a persistent queue on the server, one student at a time. Closing the browser does not stop it. Unprocessed work resumes after restart. A failed batch can be retried without overwriting reviewed papers.
-7. Review each paper. The aligned scan and original PDF are available. Uncertain marks remain `?`; blanks use `-`. All papers require an explicit student-detail and page-pairing check before approval. Corrections have an audit record; concurrent edits cannot silently overwrite each other.
-8. Download approved results as Excel/CSV and individual PDF marksheets.
+7. Review **Student details** first. Each mapped field has its original aligned crop, editable text and OCR alternatives. Enlarge a crop, correct the value and choose **Confirmed from scan**. Use **Blank on paper** only for an empty field, or **Unreadable / incomplete** when it cannot be recovered. These two choices clear the value and retain an explicit status. Changing a confirmed value resets its confirmation.
+8. Check that both pages belong to the student and save. **Save & next student** speeds up the batch. Once all eight fields have a recorded decision and the name is confirmed, **Student details Excel / CSV** can export the record even while marks are under review. Exports include source pages, a paper ID and a separate status for every field. Phone numbers remain text in Excel.
+9. Review all answers against the scans. Uncertain marks remain `?`; blanks use `-`. Approve only after checking all answers and student details. Download **Results Excel / CSV** and individual PDF marksheets after approval. Corrections have an audit record; concurrent edits cannot silently overwrite each other.
 
 Scoring: Q1–10 Science /40, Q11–20 Mathematics /40, Q21–25 Mental Ability /20. Four marks for an exact key match, zero otherwise, no negative marking. Unresolved answers prevent approval.
 
 ## Recognition and limits
 
 - The answer reader is real computer vision, not simulated results. It registers each page to the blank master and measures added ink in mapped answer areas. Multiple and faint marks are flagged. Misaligned pages require manual review.
-- RapidOCR runs on the local computer with models included in its installed package; student scans are not sent to an external OCR service. Tesseract on PATH is a fallback. OCR suggestions are never verified identity. Printed Latin text is tested on the synthetic sample; handwriting and Marathi recognition are not validated in this release.
+- Student extraction uses a pinned English PP-OCRv5 mobile recognizer from RapidAI/PaddleOCR, running locally through ONNX Runtime. It keeps higher-resolution handwriting crops and compares original, grid-suppressed and cell-interior readings. `setup_ocr.py` downloads the model once and verifies its SHA-256; the Docker build and `start.sh` run this step automatically. Processing itself makes no cloud OCR requests. The original RapidOCR/Tesseract path remains a fallback if the enhanced model is missing. See `third_party/README.md` for attribution.
+- These are suggestions, never verified identity. A 10-paper local calibration comparison improved exact matches from 2/65 to 40/65 clearly readable filled fields. Three additional blank fields were correctly left empty; 12 ambiguous/incomplete fields were excluded. The same papers were used during development, so this is not independent accuracy validation. Names and school names still need frequent corrections. Marathi handwriting has not been validated. See `VALIDATION.md`.
+- No field is automatically confirmed. A confirmed mobile must contain exactly 10 digits; OCR does not replace letters with digits or invent missing digits. The expected exam class is displayed separately, not silently copied into the extracted student class.
 - If no OCR engine is available, mark detection still works; student details can be entered manually.
-- Perspective alignment is supported. Strong page curl, erasures, photocopy noise, shifted printing and handwritten corrections are not reliably resolved automatically. There is no accuracy guarantee or confidence calibration on the client's papers yet.
+- Perspective alignment is supported. Strong page curl, erasures, photocopy noise, shifted printing and handwritten corrections are not reliably resolved automatically. Model scores rank alternatives; they are not calibrated probabilities that a student identity is correct.
 - Sequential pairing cannot establish ownership of an unlabelled second page if same-format pages are mixed. Staff must verify pairing. Future papers should include a student/page ID on every page.
-- The official answer key and representative combined client PDF have not been supplied. Templates from the client's photographs have not been pre-calibrated, and no real student scores are seeded.
+- A Class 10 blank master, supplied official key and 10-paper pilot were calibrated locally. Real scans, transcriptions, answer maps and provisional scores are private working files and are not seeded or committed in this repository. Each new class/layout still needs its own checked map and key.
 - Automated integration checks cover a synthetic three-student batch; the MVP permits up to 15 students per batch. Start with 10; scan variation and Render Free performance still require client validation.
+
+## Existing papers and upgrades
+
+New batches use the improved reader automatically when its model is installed. On an existing paper, **Read details again** saves the current draft and reads from the original PDF. It refreshes suggestions and crops while preserving saved manual edits and confirmations. Existing unconfirmed text is retained unless it is empty or still equals its previous OCR suggestion; choose a new alternative explicitly when needed. Rereading returns the result to review. All eight field confirmations are required before older approved records can be exported again.
+
+For Render with the included Dockerfile, deploy the latest repository commit; the model is installed during the build. For a native Python service with root directory `paperdesk`, use `pip install -r requirements.txt && python setup_ocr.py` as the build command. The MVP still allows at most **15 students / 30 pages** per batch. No paid OCR account or hosting upgrade is introduced. Runtime performance on Render Free has not been measured. Its temporary filesystem does not provide durable storage: export and back up before redeploying.
 
 ## Storage and deployment
 

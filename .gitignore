@@ -46,3 +46,6 @@ next-env.d.ts
 /work/
 
 !.env.example
+
+# Downloaded, checksum-verified PaperDesk OCR weights.
+/paperdesk/models/
