@@ -11,34 +11,19 @@ from processor import raster,align,detail_pixels,detect_question,score,validate_
 from student_details import extract_details,empty_reading,normalise_reviews,details_ready,evidence_rect
 from setup_ocr import MODEL
 
-ROOT=Path(__file__).parent
-DATA=Path(os.environ.get('PAPERDESK_DATA',ROOT/'data')).resolve();DATA.mkdir(parents=True,exist_ok=True)
-DB=DATA/'paperdesk.sqlite';wake=threading.Event();stop=threading.Event();worker=None
+from storage import ROOT,DATA,DB,REMOTE,db,initialize,persist_files,materialize,available,worker_leadership,StorageError
+wake=threading.Event();stop=threading.Event();worker=None
 
-@contextmanager
-def db():
-    c=sqlite3.connect(DB,timeout=30);c.row_factory=sqlite3.Row;c.execute('PRAGMA foreign_keys=ON')
-    try:
-        with c:yield c
-    finally:c.close()
-
-def init():
-    with db() as c:
-        c.executescript('''PRAGMA journal_mode=WAL;
-        CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,name TEXT,email TEXT UNIQUE,password TEXT,salt TEXT);
-        CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,user_id INTEGER,expires REAL);
-        CREATE TABLE IF NOT EXISTS exams(id TEXT PRIMARY KEY,name TEXT,class_name TEXT,config TEXT,locked INTEGER DEFAULT 0,created REAL);
-        CREATE TABLE IF NOT EXISTS batches(id TEXT PRIMARY KEY,exam_id TEXT,name TEXT,pages INTEGER,total INTEGER,done INTEGER DEFAULT 0,status TEXT,error TEXT,created REAL);
-        CREATE TABLE IF NOT EXISTS papers(id TEXT PRIMARY KEY,batch_id TEXT,idx INTEGER,data TEXT,status TEXT,version INTEGER DEFAULT 1,UNIQUE(batch_id,idx));
-        CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY,paper_id TEXT,user_id INTEGER,at REAL,before_data TEXT,after_data TEXT);
-        ''')
-        c.execute("UPDATE batches SET status='queued' WHERE status='processing'")
+def init():initialize()
 
 @asynccontextmanager
 async def lifespan(app):
     global worker
     init();stop.clear();worker=threading.Thread(target=work_loop,daemon=True);worker.start();yield;stop.set();wake.set();worker.join(timeout=3)
 app=FastAPI(title='PaperDesk',lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
+@app.exception_handler(StorageError)
+async def storage_error(request,exc):return JSONResponse({'detail':str(exc)},507)
+
 app.mount('/static',StaticFiles(directory=ROOT/'static'),name='static')
 
 @app.middleware('http')
@@ -74,7 +59,7 @@ def session(request:Request):
     with db() as c:setup=c.execute('SELECT count(*) FROM users').fetchone()[0]==0
     try:u=user(request)
     except HTTPException:u=None
-    return {'setup_required':setup,'user':u,'ocr_available':ocr_available(),'student_ocr_enhanced':MODEL.exists()}
+    return {'setup_required':setup,'user':u,'persistent_storage':REMOTE,'ocr_available':ocr_available(),'student_ocr_enhanced':MODEL.exists()}
 
 @app.post('/api/setup')
 async def setup(request:Request):
@@ -83,7 +68,7 @@ async def setup(request:Request):
     with db() as c:
         c.execute('BEGIN IMMEDIATE')
         if c.execute('SELECT count(*) FROM users').fetchone()[0]:raise HTTPException(409,'Administrator is already configured.')
-        salt=secrets.token_hex(16);cur=c.execute('INSERT INTO users(name,email,password,salt) VALUES(?,?,?,?)',(name[:80],email[:200],password_hash(password,salt),salt));uid=cur.lastrowid
+        salt=secrets.token_hex(16);cur=c.execute('INSERT INTO users(name,email,password,salt) VALUES(?,?,?,?) RETURNING id',(name[:80],email[:200],password_hash(password,salt),salt));uid=cur.fetchone()[0]
     return issue_session(uid)
 
 @app.post('/api/login')
@@ -106,9 +91,9 @@ def dashboard(request:Request):
     user(request)
     with db() as c:
         exams=[dict(r) for r in c.execute('SELECT id,name,class_name,locked,created FROM exams ORDER BY created DESC')]
-        batches=[dict(r) for r in c.execute('SELECT b.*,e.name exam_name,e.class_name,(SELECT count(*) FROM papers p WHERE p.batch_id=b.id AND p.status="approved") approved FROM batches b JOIN exams e ON e.id=b.exam_id ORDER BY b.created DESC')]
+        batches=[dict(r) for r in c.execute("SELECT b.*,e.name exam_name,e.class_name,(SELECT count(*) FROM papers p WHERE p.batch_id=b.id AND p.status='approved') approved FROM batches b JOIN exams e ON e.id=b.exam_id ORDER BY b.created DESC")]
         for batch in batches:
-            batch['approved']=sum(details_ready(json.loads(row['data'])) for row in c.execute('SELECT data FROM papers WHERE batch_id=? AND status="approved"',(batch['id'],)))
+            batch['approved']=sum(details_ready(json.loads(row['data'])) for row in c.execute("SELECT data FROM papers WHERE batch_id=? AND status='approved'",(batch['id'],)))
     return {'exams':exams,'batches':batches}
 
 @app.post('/api/exams')
@@ -121,7 +106,7 @@ async def create_exam(request:Request):
 
 @app.get('/api/exams/{id}')
 def exam(id:str,request:Request):
-    user(request);e=require_row('exams',id);e['config']=json.loads(e['config']);e['has_template']=(DATA/'exams'/id/'page-0.png').exists();return e
+    user(request);e=require_row('exams',id);e['config']=json.loads(e['config']);e['has_template']=available(DATA/'exams'/id/'page-0.png');return e
 
 @app.put('/api/exams/{id}')
 async def save_exam(id:str,request:Request):
@@ -162,13 +147,15 @@ async def upload_template(id:str,request:Request,file:UploadFile=File(...)):
         target.replace(folder/'template.pdf')
     except Exception:raise HTTPException(400,'Unable to render the master PDF.')
     conf=json.loads(e['config']);conf['mapping']={};conf['fields']={}
-    with db() as c:c.execute('UPDATE exams SET config=? WHERE id=?',(json.dumps(conf),id))
+    with db() as c:
+        persist_files(c,[folder/'template.pdf',folder/'page-0.png',folder/'page-1.png'])
+        c.execute('UPDATE exams SET config=? WHERE id=?',(json.dumps(conf),id))
     return {'ok':True}
 
 @app.post('/api/exams/{id}/lock')
 def lock(id:str,request:Request):
     user(request);e=require_row('exams',id)
-    if not (DATA/'exams'/id/'page-1.png').exists():raise HTTPException(400,'Upload a two-page blank master first.')
+    if not available(DATA/'exams'/id/'page-1.png'):raise HTTPException(400,'Upload a two-page blank master first.')
     try:validate_config(json.loads(e['config']))
     except ValueError as err:raise HTTPException(400,str(err))
     with db() as c:c.execute('UPDATE exams SET locked=1 WHERE id=?',(id,))
@@ -181,7 +168,9 @@ async def upload_batch(request:Request,exam_id:str=Form(...),file:UploadFile=Fil
     id=uuid.uuid4().hex;folder=DATA/'batches'/id;folder.mkdir(parents=True);n=await save_upload(file,folder/'source.pdf')
     if n<2 or n>30 or n%2:
         (folder/'source.pdf').unlink();raise HTTPException(400,'MVP limit: maximum 15 students (30 pages) per batch. Use 2 to 30 pages, with two consecutive pages per student.')
-    with db() as c:c.execute('INSERT INTO batches VALUES(?,?,?,?,?,0,?,?,?)',(id,exam_id,Path(file.filename or 'Batch.pdf').name[:150],n,n//2,'queued','',time.time()))
+    with db() as c:
+        persist_files(c,[folder/'source.pdf'])
+        c.execute('INSERT INTO batches VALUES(?,?,?,?,?,0,?,?,?)',(id,exam_id,Path(file.filename or 'Batch.pdf').name[:150],n,n//2,'queued','',time.time()))
     wake.set();return {'id':id}
 
 @app.get('/api/batches/{id}')
@@ -232,8 +221,8 @@ def reread_details(id:str,request:Request,version:int):
     u=user(request);p=require_row('papers',id)
     if p['version']!=version:raise HTTPException(409,'This paper changed. Reload before reading the details again.')
     b=require_row('batches',p['batch_id']);e=require_row('exams',b['exam_id']);conf=json.loads(e['config']);folder=DATA/'batches'/b['id']
-    master=cv2.imread(str(DATA/'exams'/e['id']/'page-0.png'))
-    with fitz.open(folder/'source.pdf') as doc:
+    master=cv2.imread(str(materialize(DATA/'exams'/e['id']/'page-0.png')))
+    with fitz.open(materialize(folder/'source.pdf')) as doc:
         page=doc[p['idx']*2];low=raster(page);aligned,quality,transform=align(low,master,True)
         if aligned is None:raise HTTPException(400,'Page alignment failed. Read the student details from the original PDF.')
         pixels,reference=detail_pixels(page,low,master,transform)
@@ -246,7 +235,8 @@ def reread_details(id:str,request:Request,version:int):
         if not reviewed and (not old['fields'].get(key) or (previous is not None and old['fields'][key]==previous)):
             new['fields'][key]=readings[key]['suggested'];new['field_review'][key]={'status':'pending','value':new['fields'][key]}
     with db() as c:
-        cur=c.execute('UPDATE papers SET data=?,status="review",version=version+1 WHERE id=? AND version=?',(json.dumps(new),id,version))
+        persist_files(c,sorted(folder.glob(f"{p['idx']}-field-*.png")))
+        cur=c.execute("UPDATE papers SET data=?,status='review',version=version+1 WHERE id=? AND version=?",(json.dumps(new),id,version))
         if cur.rowcount!=1:raise HTTPException(409,'This paper changed while OCR was running. Reload before continuing.')
         c.execute('INSERT INTO audit(paper_id,user_id,at,before_data,after_data) VALUES(?,?,?,?,?)',(id,u['id'],time.time(),p['data'],json.dumps(new)))
     return {'ok':True}
@@ -256,13 +246,13 @@ def field_image(id:str,key:str,request:Request):
     user(request);p=require_row('papers',id)
     if key not in FIELDS:raise HTTPException(404)
     folder=DATA/'batches'/p['batch_id'];path=folder/f"{p['idx']}-field-{key}.png"
-    if path.exists():return FileResponse(path)
+    if available(path):return FileResponse(materialize(path))
     # Legacy records can show mapped evidence without changing their saved data.
     d=json.loads(p['data'])
     if any('Page 1: alignment failed' in flag for flag in d.get('flags',[])):raise HTTPException(404,'Read the original PDF; alignment failed.')
     e=require_row('exams',require_row('batches',p['batch_id'])['exam_id']);region=json.loads(e['config']).get('fields',{}).get(key)
     if not region:raise HTTPException(404,'Field not mapped')
-    pixels=cv2.imread(str(folder/f"{p['idx']}-0.png"))
+    pixels=cv2.imread(str(materialize(folder/f"{p['idx']}-0.png")))
     if pixels is None:raise HTTPException(404)
     cut=crop(pixels,evidence_rect(region['box'],pixels.shape))
     if not cut.size:raise HTTPException(404)
@@ -275,27 +265,37 @@ def master_image(id:str,page:int,request:Request):
     user(request);require_row('exams',id)
     if page not in (0,1):raise HTTPException(404)
     p=DATA/'exams'/id/f'page-{page}.png'
-    if not p.exists():raise HTTPException(404)
-    return FileResponse(p)
+    if not available(p):raise HTTPException(404)
+    return FileResponse(materialize(p))
 
 @app.get('/media/papers/{id}/{page}.png')
 def paper_image(id:str,page:int,request:Request):
     user(request);p=require_row('papers',id)
     if page not in (0,1):raise HTTPException(404)
-    return FileResponse(DATA/'batches'/p['batch_id']/f"{p['idx']}-{page}.png")
+    return FileResponse(materialize(DATA/'batches'/p['batch_id']/f"{p['idx']}-{page}.png"))
 
 def work_loop():
     while not stop.is_set():
-        with db() as c:b=c.execute("SELECT * FROM batches WHERE status='queued' ORDER BY created LIMIT 1").fetchone()
-        if not b:wake.wait(1);wake.clear();continue
-        try:process_batch(dict(b))
-        except Exception as e:
-            with db() as c:c.execute("UPDATE batches SET status='failed',error=? WHERE id=?",('Processing failed: '+str(e)[:180],b['id']))
+        try:
+            with worker_leadership(stop) as check_connection:
+                if check_connection is None:return
+                with db() as c:c.execute("UPDATE batches SET status='queued' WHERE status='processing'")
+                while not stop.is_set():
+                    check_connection()
+                    with db() as c:b=c.execute("SELECT * FROM batches WHERE status='queued' ORDER BY created LIMIT 1").fetchone()
+                    if not b:wake.wait(2);wake.clear();continue
+                    try:process_batch(dict(b))
+                    except Exception as e:
+                        message=str(e) if isinstance(e,StorageError) else 'Processing could not complete. Check storage connectivity and the source PDF, then retry.'
+                        with db() as c:c.execute("UPDATE batches SET status='failed',error=? WHERE id=?",(message,b['id']))
+        except Exception:
+            # A database outage must not terminate the queue or expose credentials.
+            stop.wait(5)
 
 def process_batch(b):
-    e=require_row('exams',b['exam_id']);conf=json.loads(e['config']);folder=DATA/'batches'/b['id'];masters=[cv2.imread(str(DATA/'exams'/e['id']/f'page-{i}.png')) for i in range(2)]
+    e=require_row('exams',b['exam_id']);conf=json.loads(e['config']);folder=DATA/'batches'/b['id'];masters=[cv2.imread(str(materialize(DATA/'exams'/e['id']/f'page-{i}.png'))) for i in range(2)]
     with db() as c:c.execute("UPDATE batches SET status='processing',error='' WHERE id=?",(b['id'],))
-    with fitz.open(folder/'source.pdf') as doc:
+    with fitz.open(materialize(folder/'source.pdf')) as doc:
         for idx in range(b['total']):
             if stop.is_set():return
             with db() as c:exists=c.execute('SELECT 1 FROM papers WHERE batch_id=? AND idx=?',(b['id'],idx)).fetchone()
@@ -318,6 +318,7 @@ def process_batch(b):
             flags.append('Verify student details, both pages and all detected answers before approving.')
             data={'fields':fields,'field_ocr':readings,'field_review':{},'answers':answers,'details':details,'flags':flags,'pairing_verified':False,'score':score(answers,conf['key'])}
             with db() as c:
+                persist_files(c,sorted(folder.glob(f'{idx}-*.png')))
                 c.execute('INSERT INTO papers VALUES(?,?,?,?,?,1)',(uuid.uuid4().hex,b['id'],idx,json.dumps(data),'review'))
                 c.execute('UPDATE batches SET done=(SELECT count(*) FROM papers WHERE batch_id=?) WHERE id=?',(b['id'],b['id']))
     with db() as c:c.execute("UPDATE batches SET status='ready' WHERE id=?",(b['id'],))
@@ -325,7 +326,7 @@ def process_batch(b):
 @app.get('/api/batches/{id}/export/{kind}')
 def export(id:str,kind:str,request:Request):
     user(request);b=require_row('batches',id)
-    with db() as c:rows=c.execute('SELECT data,idx FROM papers WHERE batch_id=? AND status="approved" ORDER BY idx',(id,)).fetchall()
+    with db() as c:rows=c.execute("SELECT data,idx FROM papers WHERE batch_id=? AND status='approved' ORDER BY idx",(id,)).fetchall()
     rows=[r for r in rows if details_ready(json.loads(r['data']))]
     if not rows:raise HTTPException(400,'Approve at least one paper with all student details checked before exporting.')
     headers=['Student number']+FIELDS+['Science /40','Mathematics /40','Mental ability /20','Total /100','Correct','Blank']+[f'Q{i}' for i in range(1,26)]
@@ -407,6 +408,7 @@ def sample(request:Request):
     bid=uuid.uuid4().hex;bf=DATA/'batches'/bid;bf.mkdir(parents=True)
     create_pdf(bf/'source.pdf',['Sample Student One','Sample Student Two','Sample Student Three'])
     with db() as c:
+        persist_files(c,[ef/'template.pdf',ef/'page-0.png',ef/'page-1.png',bf/'source.pdf'])
         c.execute('INSERT INTO exams VALUES(?,?,?,?,1,?)',(eid,'Synthetic walkthrough - NOT official','9',json.dumps(conf),time.time()))
         c.execute('INSERT INTO batches VALUES(?,?,?,?,?,0,?,?,?)',(bid,eid,'Synthetic sample - 3 students.pdf',6,3,'queued','',time.time()))
     wake.set();return {'id':bid}
@@ -414,4 +416,4 @@ def sample(request:Request):
 @app.get('/api/batches/{id}/source')
 def source_pdf(id:str,request:Request):
     user(request);require_row('batches',id)
-    return FileResponse(DATA/'batches'/id/'source.pdf',media_type='application/pdf',filename='original-student-batch.pdf')
+    return FileResponse(materialize(DATA/'batches'/id/'source.pdf'),media_type='application/pdf',filename='original-student-batch.pdf')

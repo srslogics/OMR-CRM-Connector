@@ -1,6 +1,8 @@
 """Integration checks with generated scans. Never uses real student records."""
 import os,tempfile,time,unittest,io,json
 from pathlib import Path
+if os.environ.get('DATABASE_URL') and not os.environ.get('PAPERDESK_DB_SCHEMA','').startswith('paperdesk_test_'):
+ raise RuntimeError('Remote tests require an isolated paperdesk_test_ schema')
 TEST_DIR=tempfile.TemporaryDirectory();os.environ['PAPERDESK_DATA']=TEST_DIR.name
 from fastapi.testclient import TestClient
 from app import app,db,DATA,process_batch,require_row
@@ -40,7 +42,7 @@ class Integration(unittest.TestCase):
     odd=fitz.open();odd.insert_pdf(d,from_page=0,to_page=0);odd_bytes=odd.tobytes();odd.close()
    self.assertEqual(client.post('/api/batches',data={'exam_id':eid},files={'file':('odd.pdf',odd_bytes,'application/pdf')}).status_code,400)
    r=client.post('/api/batches',data={'exam_id':eid},files={'file':('students.pdf',student.read_bytes(),'application/pdf')});self.assertEqual(r.status_code,200,r.text);bid=r.json()['id']
-   deadline=time.time()+90
+   deadline=time.time()+240
    while time.time()<deadline:
     b=client.get(f'/api/batches/{bid}').json()
     if b['status'] in ('ready','failed'):break
@@ -93,7 +95,7 @@ class Integration(unittest.TestCase):
    # Legacy approvals must acquire the new field checks before release.
    with db() as c:
     legacy=dict(first['data']);legacy['pairing_verified']=True
-    c.execute('UPDATE papers SET data=?,status="approved" WHERE id=?',(json.dumps(legacy),first['id']))
+    c.execute("UPDATE papers SET data=?,status='approved' WHERE id=?",(json.dumps(legacy),first['id']))
    self.assertEqual(client.get(f'/api/papers/{first["id"]}/marksheet').status_code,400)
    self.assertEqual(client.get(f'/api/batches/{bid}/export/csv').status_code,400)
    # Exercise both sides of the MVP batch limit through the upload API.

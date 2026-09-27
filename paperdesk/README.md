@@ -81,3 +81,14 @@ Tests use isolated temporary storage and generated papers. They verify login, pr
 ## Uptime monitoring
 
 Use an HTTP(S) monitor with URL `https://YOUR-SERVICE.onrender.com/`. The public homepage supports both GET and HEAD, so UptimeRobot’s default HEAD check works without changing the method. This checks HTTP availability only; it does not verify completion of paper processing or preserve data on Render Free.
+
+
+### Durable storage on Render Free
+
+Set `DATABASE_URL` in Render's Environment settings to a PostgreSQL direct or **session pooler** connection (port 5432). URL-encode special characters in the password. Never commit this value. Render deployments require this setting; the application refuses to silently start an empty temporary SQLite workspace.
+
+PaperDesk creates an isolated `paperdesk` schema. Accounts, sessions, exams, results and private document bytes are saved in PostgreSQL. Local files are disposable caches and are recovered on demand after redeployment. For this small MVP, documents are stored transactionally in the same database, not in a public bucket. The default file budget is 180 MiB (`PAPERDESK_FILE_BUDGET_MB`); this is an application limit, not a guarantee against provider database quotas. Monitor database usage. Larger workloads should move document bytes to private object storage.
+
+The connection must support session advisory locks; do not use a transaction pooler on port 6543. Keep one application worker. Render Free can still sleep, but PostgreSQL records survive replacement of the Render container. Missing or failed database connections never fall back to an empty account database. Previously erased SQLite data cannot be recovered by this change; restore from a backup if available.
+
+For a disposable isolated PostgreSQL test schema, set `PAPERDESK_DB_SCHEMA=paperdesk_test_<hex>` and run `test_persistence.py` and `test_app.py` separately with fresh schemas. Tests use only synthetic documents.
