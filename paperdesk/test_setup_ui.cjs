@@ -1,0 +1,14 @@
+const fs=require('fs'),vm=require('vm'),assert=require('node:assert/strict');
+const source=fs.readFileSync(__dirname+'/static/app.js','utf8');
+const extract=(start,end)=>source.slice(source.indexOf(start),source.indexOf(end,source.indexOf(start)));
+const nodes={'#modal':{open:true},'#modalContent':{appendChild(el){nodes['#'+el.id]=el}},'#lockCheck':{checked:true},'#lockSubmit':{disabled:false,textContent:'Lock exam'}};
+let saved=0,closed=0;
+const context={Number,Array,clearTimeout(){},setTimeout(){},$:s=>nodes[s],document:{createElement(){return {setAttribute(){}}}},saveExam:async()=>{saved++},api:async()=>{throw Error('Upload a two-page blank master first.')},closeModal:()=>{closed++},openExam:async()=>{},exam:{id:'example'}};
+vm.createContext(context);
+vm.runInContext(extract('function toast(','\nasync function action')+'\n'+extract('function examSetupProblems(','\nfunction openMap()'),context);
+const e={has_template:false,config:{key:Array(25).fill(''),mapping:{}}};
+assert.equal(context.examSetupProblems(e).length,3);
+e.has_template=true;e.config.key=Array(25).fill('A');for(let q=1;q<=25;q++)e.config.mapping[q]={page:q<=10?0:1,boxes:Array.from({length:4},()=>[.1,.1,.02,.02])};
+assert.deepEqual(Array.from(context.examSetupProblems(e)),[]);
+e.config.mapping[19].page=0;assert.match(context.examSetupProblems(e)[0],/19/);
+(async()=>{await context.confirmLock();assert.equal(saved,1);assert.equal(closed,0);assert.match(nodes['#modalFeedback'].textContent,/two-page/);assert.equal(nodes['#lockSubmit'].disabled,false);nodes['#lockCheck'].checked=false;await context.confirmLock();assert.equal(saved,1);assert.match(nodes['#modalFeedback'].textContent,/Confirm/);console.log('Setup validation and visible modal error regression tests passed.');})().catch(e=>{console.error(e);process.exitCode=1});
