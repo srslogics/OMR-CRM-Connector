@@ -40,6 +40,16 @@ class MarkReading(unittest.TestCase):
   self.assertEqual(new['answers'][:5],['A','A','D','D','A'])
   self.assertEqual(new['fields'],old['fields']);self.assertEqual(new['field_review'],old['field_review'])
   self.assertTrue(new['pairing_verified']);self.assertEqual(new['score']['total'],92)
+ def test_strong_evidence_is_stable_and_not_a_percentage(self):
+  master,regions=self.fixture();scan=master.copy();self.tick(scan,2,color=(90,90,90))
+  d=detect_question(scan,master,regions)
+  self.assertEqual(d['answer'],'C');self.assertEqual(d['confidence'],'strong')
+  self.assertEqual(len(d['checkbox_evidence']),4)
+  self.assertEqual(len(d['checkbox_evidence'][2]['pixels_by_threshold']),3)
+ def test_missing_competing_box_prevents_strong_label(self):
+  master,regions=self.fixture();scan=master.copy();self.tick(scan,2,color=(90,90,90))
+  x,y,w,h=regions[0];scan[int(y*350):int((y+h)*350),int(x*1100):int((x+w)*1100)]=255
+  self.assertNotEqual(detect_question(scan,master,regions)['confidence'],'strong')
  def test_valid_zero_is_still_allowed_after_review(self):
   self.assertEqual(score(['B']*25,['A']*25)['total'],0)
   self.assertEqual(score(['-']*25,['A']*25)['total'],0)

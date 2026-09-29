@@ -103,13 +103,14 @@ class Integration(unittest.TestCase):
    before_first=client.get(f'/api/papers/{first["id"]}').json()
    current=client.get(f'/api/papers/{pid}').json()
    edited=list(current['data']['answers']);edited[0]='D'
-   edit={'answers':edited,'fields':current['data']['fields'],'field_review':current['data']['field_review'],'pairing_verified':True,'approve':False,'version':current['version']}
+   edit={'answers':edited,'fields':current['data']['fields'],'field_review':current['data']['field_review'],'pairing_verified':True,'approve':False,'version':current['version'],'answer_checks':{'0':'D'}}
    self.assertEqual(client.put(f'/api/papers/{pid}',json=edit).status_code,200)
    reread=client.post(f'/api/batches/{bid}/reread-marks')
    self.assertEqual(reread.status_code,200,reread.text);self.assertEqual(reread.json()['updated'],2)
    self.assertEqual(client.get(f'/api/papers/{first["id"]}').json(),before_first)
    reread_paper=client.get(f'/api/papers/{pid}').json()
    self.assertEqual(reread_paper['data']['answers'][0],'D')
+   self.assertEqual(reread_paper['data']['answer_checks'],{'0':'D'})
    self.assertEqual(reread_paper['data']['fields'],current['data']['fields'])
    self.assertEqual(client.get(f'/media/papers/{pid}/answers/1.png').status_code,200)
    self.assertEqual(client.get(f'/media/papers/{pid}/answers/26.png').status_code,404)

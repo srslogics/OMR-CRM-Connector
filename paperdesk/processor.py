@@ -45,7 +45,7 @@ def crop(im,r):
     h,w=im.shape[:2];x,y,rw,rh=r
     return im[max(0,int(y*h)):min(h,int((y+rh)*h)),max(0,int(x*w)):min(w,int((x+rw)*w))]
 
-MARK_READER_VERSION = 2
+MARK_READER_VERSION = 3
 
 def ink_contrast(image):
     """Remove slow lighting/shadow changes without inventing missing strokes."""
@@ -54,7 +54,7 @@ def ink_contrast(image):
     background=cv2.morphologyEx(gray,cv2.MORPH_CLOSE,np.ones((size,size),np.uint8))
     return cv2.subtract(background,gray)
 
-def detect_question(image,template,regions,prepared=None):
+def detect_question_legacy(image,template,regions,prepared=None):
     """Read scan evidence only. The answer key is deliberately not an input.
 
     Global registration cannot compensate for every curved page. Match nearby
@@ -123,6 +123,51 @@ def detect_question(image,template,regions,prepared=None):
         answer='?';reason='No reliable mark found; confirm a blank from the scan.'
     return {'answer':answer,'reason':reason,'evidence':vals,
             'local_shift':[dx,dy],'alignment':round(float(correlation),3)}
+
+def checkbox_evidence(a,b,rect):
+ h,w=a.shape;scale=w/1100; x,y,rw,rh=rect;x,y,xx,yy=int(x*w),int(y*h),int((x+rw)*w),int((y+rh)*h)
+ bg=b[y:yy,x:xx];cs,_=cv2.findContours((bg>30).astype('uint8'),cv2.RETR_LIST,cv2.CHAIN_APPROX_SIMPLE)
+ cand=[]
+ for cc in cs:
+  bx,by,bw,bh=cv2.boundingRect(cc);ar=cv2.contourArea(cc)
+  if bw>=5*scale and bh>=5*scale and .3<bw/bh<1.8 and ar>bw*bh*.5 and bw<bg.shape[1]*.9 and bh<bg.shape[0]*.97:cand.append((ar,bx,by,bw,bh))
+ if not cand:return None
+ _,bx,by,bw,bh=max(cand);ref=bg[by:by+bh,bx:bx+bw];margin=max(4,round(7*scale))
+ bx+=x;by+=y
+ if bx<margin or by<margin or bx+bw+margin>w or by+bh+margin>h:return None
+ src=a[by-margin:by+bh+margin,bx-margin:bx+bw+margin]
+ ink=(ref>35).astype('float32');inset=max(1,round(3*scale));ink[inset:-inset,inset:-inset]=0
+ dist=cv2.distanceTransform((src<25).astype('uint8'),cv2.DIST_L2,3)
+ costs=cv2.matchTemplate(np.minimum(dist,3),ink,cv2.TM_CCORR)/max(1,ink.sum())
+ iy,ix=np.mgrid[-margin:margin+1,-margin:margin+1];costs+=.005*(ix*ix+iy*iy)
+ _,_,loc,_=cv2.minMaxLoc(costs);dx,dy=loc[0]-margin,loc[1]-margin
+ cut=src[loc[1]:loc[1]+bh,loc[0]:loc[0]+bw]
+ old=cv2.dilate((ref>30).astype('uint8'),np.ones((max(1,round(scale))*2+1,)*2,np.uint8))>0
+ inside=np.zeros(ref.shape,bool);inset=max(1,round(2*scale));inside[inset:-inset,inset:-inset]=True
+ vals=[]
+ for t in (22,30,40):
+  added=((cut>t)&~old&inside).astype('uint8');n,_,st,_=cv2.connectedComponentsWithStats(added,8)
+  vals.append(int(max(st[1:,cv2.CC_STAT_AREA],default=0)))
+ return {'pixels_by_threshold':vals,'registration_cost':round(float(costs[loc[1],loc[0]]),3),'shift':[dx,dy],'search_limit':margin}
+
+def detect_question(image,template,regions,prepared=None):
+    prepared=prepared if prepared is not None else (ink_contrast(image),ink_contrast(template))
+    legacy=detect_question_legacy(image,template,regions,prepared)
+    if image.shape[:2]!=template.shape[:2] or len(regions)!=4:return {**legacy,'confidence':'review'}
+    a,b=prepared;unit=max(.6,(a.shape[1]/1100)**2)
+    evidence=[checkbox_evidence(a,b,r) for r in regions]
+    valid=all(v and v['registration_cost']<1.25 and max(map(abs,v['shift']))<v['search_limit'] for v in evidence)
+    candidates=[i for i,v in enumerate(evidence) if v and v['pixels_by_threshold'][1]>=10*unit and v['pixels_by_threshold'][2]>=5*unit and v['registration_cost']<.9]
+    selected=candidates[0] if len(candidates)==1 else None
+    clear=valid and selected is not None and all(v['pixels_by_threshold'][0]<5*unit for i,v in enumerate(evidence) if i!=selected)
+    # The two registration methods can disagree. Such disagreements are never
+    # promoted to confident answers merely because one looks stronger.
+    if clear and legacy['answer'] in ('?', 'ABCD'[selected]):
+        return {**legacy,'answer':'ABCD'[selected],'confidence':'strong',
+                'reason':'Clear checkbox mark at three contrast levels; other options clear.',
+                'checkbox_evidence':evidence}
+    return {**legacy,'confidence':'review','checkbox_evidence':evidence,
+            'reason':('Readers disagree; check the scan.' if clear else legacy['reason'])}
 
 def detect_page(image,template,mapping,page):
     prepared=(ink_contrast(image),ink_contrast(template))

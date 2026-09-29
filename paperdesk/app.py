@@ -259,6 +259,9 @@ def paper(id:str,request:Request):
 
 def paper_payload(p):
     p['data']=json.loads(p['data']);p['details_ready']=details_ready(p['data'])
+    d=p['data'];checked=d.get('answer_checks',{})
+    d['score']['checks_required']=sum(a=='?' or (str(i) not in checked or checked[str(i)]!=a) and (d.get('details',[{}]*25)[i].get('confidence')!='strong' or d.get('details',[{}]*25)[i].get('answer')!=a) for i,a in enumerate(d['answers']))
+    if p['status']=='approved':d['score']['checks_required']=0
     if p['status']=='approved' and not p['details_ready']:p['status']='review'
     return p
 
@@ -295,8 +298,11 @@ async def review(id:str,request:Request):
     if approve and ('?' in answers or not fields['name'] or incoming.get('pairing_verified') is not True):raise HTTPException(400,'Resolve every answer, enter the student name and verify page pairing before approval.')
     try:reviews=normalise_reviews(incoming.get('field_review',old.get('field_review',{})),fields)
     except ValueError as error:raise HTTPException(400,str(error))
-    overrides=set(old.get('answer_overrides',[]))|{i for i,(a,b) in enumerate(zip(old['answers'],answers)) if a!=b}
-    e=require_row('exams',require_row('batches',p['batch_id'])['exam_id']);new={**old,'answer_overrides':sorted(overrides),'answers':answers,'fields':fields,'field_review':reviews,'score':score(answers,json.loads(e['config'])['key']),'pairing_verified':incoming.get('pairing_verified') is True}
+    checks=incoming.get('answer_checks',old.get('answer_checks',{}))
+    if not isinstance(checks,dict):raise HTTPException(400,'Invalid answer checks')
+    checks={str(i):a for i,a in enumerate(answers) if a!='?' and checks.get(str(i))==a}
+    overrides=set(old.get('answer_overrides',[]))|{i for i,(a,b) in enumerate(zip(old['answers'],answers)) if a!=b}|{int(i) for i in checks}
+    e=require_row('exams',require_row('batches',p['batch_id'])['exam_id']);new={**old,'answer_checks':checks,'answer_overrides':sorted(overrides),'answers':answers,'fields':fields,'field_review':reviews,'score':score(answers,json.loads(e['config'])['key']),'pairing_verified':incoming.get('pairing_verified') is True}
     if approve and not details_ready(new):raise HTTPException(400,'Check all 8 student fields. Confirm each value, or mark it blank or unreadable, before approving.')
     with db() as c:
         cur=c.execute('UPDATE papers SET data=?,status=?,version=version+1 WHERE id=? AND version=?',(json.dumps(new),'approved' if approve else 'review',id,incoming.get('version')))

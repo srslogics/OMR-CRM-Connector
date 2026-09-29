@@ -52,3 +52,13 @@ Passed: four local integration tests; four integration tests against an isolated
 - Added authenticated original/contrast answer crops and batch rereading. Approved papers are skipped; manual answer changes (including legacy audit history), student fields and field confirmations are preserved. Version comparisons prevent overwriting concurrent reviews. Rereads are audited.
 - Synthetic tests cover faint grey ink above the old darkness threshold, uneven lighting, translation, two marks, missing evidence, genuine zero scoring, manual correction preservation, approval protection and authenticated evidence access. This is not a claim of fully automated accuracy on handwritten papers.
 - The private 20-page pilot was inspected separately, including both prior zero-score papers. No real student scans or identities are included in repository fixtures. Some students tick beside printed answer labels instead of checkboxes; these still require review in the full scan.
+
+## Evidence checks and exception-first review (2026-09-30)
+
+Reader v3 adds independently aligned checkbox interiors at three contrast thresholds. A strong-evidence label requires a stable selected option, readable competing boxes, no competing faint mark, bounded registration, and no disagreement with the existing reader. This label is an evidence rule, **not a calibrated probability** or automatic approval. Missing boxes, option-label ticks and disagreement remain exceptions.
+
+Private pilot benchmark: 118/250 answer regions met the strong rule. Of 75 reference answers across three papers (one existing staff-approved paper and two visually transcribed papers), 39 met the strong rule; all 39 matched. This is a small, partly development-used, single-template sample, not independent multi-class validation. It does not establish a production error rate or justify unattended release of all 2,610 papers. Real scans/reference labels remain outside Git. Re-run on separately labelled classes and scan sources before scaling.
+
+Review defaults to answer exceptions; all choices remain inspectable. Individual confirmations are saved and protected during rereading. Editing an answer invalidates its check. A next-exception action saves the draft and navigates across papers without approving results or changing the separate student-detail checks. Approved papers remain unchanged.
+
+Passed 12 local unit/integration tests, plus UI tests for exception filtering, stale confirmations, zero/partial score display, polling and exam setup. Synthetic tests include faint marks, shadows, translations, competing marks, missing competing boxes, persistence of confirmations and approved-result protection.

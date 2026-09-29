@@ -1,0 +1,11 @@
+const fs=require('fs'),vm=require('vm'),assert=require('node:assert/strict');
+const src=fs.readFileSync(__dirname+'/static/app.js','utf8');
+const ctx={paper:{data:{answers:['A','B','?','D'],details:[{answer:'A',confidence:'strong'},{answer:'B',confidence:'review'},{answer:'?',confidence:'strong'},{answer:'A',confidence:'strong'}],answer_checks:{}}}};
+vm.createContext(ctx);vm.runInContext(src.slice(src.indexOf('function answerNeedsCheck('),src.indexOf('function changeAnswer(')),ctx);
+assert.equal(ctx.answerNeedsCheck(0),false);
+assert.equal(ctx.answerNeedsCheck(1),true);
+assert.equal(ctx.answerNeedsCheck(2),true);
+assert.equal(ctx.answerNeedsCheck(3),true);
+ctx.paper.data.answer_checks[1]='B';assert.equal(ctx.answerNeedsCheck(1),false);
+ctx.paper.data.answers[1]='C';assert.equal(ctx.answerNeedsCheck(1),true);
+console.log('Exception filtering and stale confirmation checks passed.');
