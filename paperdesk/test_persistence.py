@@ -20,8 +20,21 @@ class Persistence(unittest.TestCase):
         initialize()
         with db() as c:
             self.assertEqual(c.execute('SELECT count(*) FROM users').fetchone()[0],1)
+        from storage import read_db
+        pids=set()
+        for _ in range(10):
+            with read_db() as c:
+                pids.add(c.execute('SELECT pg_backend_pid()').fetchone()[0])
+                self.assertEqual(c.execute('SELECT current_schema()').fetchone()[0],storage.SCHEMA)
+        self.assertLessEqual(len(pids),4)
         self.assertTrue(available(source))
         self.assertEqual(materialize(source).read_bytes(),payload)
+        # A replacement from another process must invalidate a warm local cache.
+        replacement=b'%PDF-replaced-fixture'
+        with db() as c:
+            c.execute('UPDATE files SET content=?,digest=?,size=? WHERE key=?',(replacement,hashlib.sha256(replacement).hexdigest(),len(replacement),storage.file_key(source)))
+        self.assertEqual(materialize(source).read_bytes(),replacement)
+        payload=replacement
         source.write_bytes(b'stale cache')
         self.assertEqual(materialize(source).read_bytes(),payload)
         before=storage.FILE_BUDGET;storage.FILE_BUDGET=0

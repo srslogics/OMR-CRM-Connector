@@ -11,7 +11,7 @@ from processor import raster,align,detail_pixels,detect_question,score,validate_
 from student_details import extract_details,empty_reading,normalise_reviews,details_ready,evidence_rect
 from setup_ocr import MODEL
 
-from storage import ROOT,DATA,DB,REMOTE,db,initialize,persist_files,materialize,available,worker_leadership,StorageError
+from storage import ROOT,DATA,DB,REMOTE,db,initialize,persist_files,materialize,available,worker_leadership,StorageError,connection_pool,close_pool,read_db
 wake=threading.Event();stop=threading.Event();worker=None
 
 def init():initialize()
@@ -19,7 +19,13 @@ def init():initialize()
 @asynccontextmanager
 async def lifespan(app):
     global worker
-    init();stop.clear();worker=threading.Thread(target=work_loop,daemon=True);worker.start();yield;stop.set();wake.set();worker.join(timeout=3)
+    init()
+    if REMOTE:connection_pool().wait(timeout=20)
+    stop.clear();worker=threading.Thread(target=work_loop,daemon=True);worker.start()
+    try:yield
+    finally:
+        stop.set();wake.set();worker.join(timeout=3)
+        if not worker.is_alive():close_pool()
 app=FastAPI(title='PaperDesk',lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 @app.exception_handler(StorageError)
 async def storage_error(request,exc):return JSONResponse({'detail':str(exc)},507)
@@ -36,13 +42,15 @@ async def secure(request,call_next):
     return r
 
 def user(request):
-    token=hashlib.sha256(request.cookies.get('paperdesk','').encode()).hexdigest()
-    with db() as c:r=c.execute('SELECT u.id,u.name,u.email FROM sessions s JOIN users u ON u.id=s.user_id WHERE token=? AND expires>?',(token,time.time())).fetchone()
+    cookie=request.cookies.get('paperdesk')
+    if not cookie:raise HTTPException(401,'Please sign in.')
+    token=hashlib.sha256(cookie.encode()).hexdigest()
+    with read_db() as c:r=c.execute('SELECT u.id,u.name,u.email FROM sessions s JOIN users u ON u.id=s.user_id WHERE token=? AND expires>?',(token,time.time())).fetchone()
     if not r:raise HTTPException(401,'Please sign in.')
     return dict(r)
 
 def require_row(table,id):
-    with db() as c:r=c.execute(f'SELECT * FROM {table} WHERE id=?',(id,)).fetchone()
+    with read_db() as c:r=c.execute(f'SELECT * FROM {table} WHERE id=?',(id,)).fetchone()
     if not r:raise HTTPException(404,'Record not found')
     return dict(r)
 
@@ -56,9 +64,12 @@ def password_hash(p,s):return hashlib.pbkdf2_hmac('sha256',p.encode(),bytes.from
 login_attempts={}
 @app.get('/api/session')
 def session(request:Request):
-    with db() as c:setup=c.execute('SELECT count(*) FROM users').fetchone()[0]==0
-    try:u=user(request)
-    except HTTPException:u=None
+    cookie=request.cookies.get('paperdesk','')
+    token=hashlib.sha256(cookie.encode()).hexdigest()
+    with read_db() as c:
+        row=c.execute('SELECT (SELECT count(*) FROM users) AS user_count,u.id,u.name,u.email FROM (SELECT 1) seed LEFT JOIN sessions s ON s.token=? AND s.expires>? LEFT JOIN users u ON u.id=s.user_id',(token,time.time())).fetchone()
+    setup=row['user_count']==0
+    u={k:row[k] for k in ('id','name','email')} if row['id'] is not None else None
     return {'setup_required':setup,'user':u,'persistent_storage':REMOTE,'ocr_available':ocr_available(),'student_ocr_enhanced':MODEL.exists()}
 
 @app.post('/api/setup')
@@ -76,7 +87,7 @@ async def login(request:Request):
     ip=request.client.host;recent=[t for t in login_attempts.get(ip,[]) if t>time.time()-60]
     if len(recent)>=8:raise HTTPException(429,'Too many attempts. Try again in a minute.')
     login_attempts[ip]=recent+[time.time()];p=await request.json()
-    with db() as c:u=c.execute('SELECT * FROM users WHERE email=?',(str(p.get('email','')).strip().lower(),)).fetchone()
+    with read_db() as c:u=c.execute('SELECT * FROM users WHERE email=?',(str(p.get('email','')).strip().lower(),)).fetchone()
     if not u or not hmac.compare_digest(password_hash(str(p.get('password','')),u['salt']),u['password']):raise HTTPException(401,'Email or password is incorrect.')
     login_attempts.pop(ip,None);return issue_session(u['id'])
 
@@ -89,11 +100,13 @@ def logout(request:Request):
 @app.get('/api/dashboard')
 def dashboard(request:Request):
     user(request)
-    with db() as c:
+    with read_db() as c:
         exams=[dict(r) for r in c.execute('SELECT id,name,class_name,locked,created FROM exams ORDER BY created DESC')]
         batches=[dict(r) for r in c.execute("SELECT b.*,e.name exam_name,e.class_name,(SELECT count(*) FROM papers p WHERE p.batch_id=b.id AND p.status='approved') approved FROM batches b JOIN exams e ON e.id=b.exam_id ORDER BY b.created DESC")]
-        for batch in batches:
-            batch['approved']=sum(details_ready(json.loads(row['data'])) for row in c.execute("SELECT data FROM papers WHERE batch_id=? AND status='approved'",(batch['id'],)))
+        counts={}
+        for row in c.execute("SELECT batch_id,data FROM papers WHERE status='approved'"):
+            counts[row['batch_id']]=counts.get(row['batch_id'],0)+int(details_ready(json.loads(row['data'])))
+        for batch in batches:batch['approved']=counts.get(batch['id'],0)
     return {'exams':exams,'batches':batches}
 
 @app.post('/api/exams')
@@ -174,12 +187,14 @@ async def upload_batch(request:Request,exam_id:str=Form(...),file:UploadFile=Fil
     wake.set();return {'id':id}
 
 @app.get('/api/batches/{id}')
-def batch(id:str,request:Request):
+def batch(id:str,request:Request,summary:bool=False):
     user(request);b=require_row('batches',id)
-    with db() as c:rows=c.execute('SELECT * FROM papers WHERE batch_id=? ORDER BY idx',(id,)).fetchall()
+    with read_db() as c:rows=c.execute('SELECT * FROM papers WHERE batch_id=? ORDER BY idx',(id,)).fetchall()
     b['papers']=[]
     for row in rows:
-        p=paper_payload(dict(row));b['papers'].append(p)
+        p=paper_payload(dict(row))
+        if summary:p['data']={k:p['data'][k] for k in ('fields','score')}
+        b['papers'].append(p)
     return b
 
 @app.post('/api/batches/{id}/retry')
@@ -246,7 +261,9 @@ def field_image(id:str,key:str,request:Request):
     user(request);p=require_row('papers',id)
     if key not in FIELDS:raise HTTPException(404)
     folder=DATA/'batches'/p['batch_id'];path=folder/f"{p['idx']}-field-{key}.png"
-    if available(path):return FileResponse(materialize(path))
+    if REMOTE or path.exists():
+        try:return FileResponse(materialize(path))
+        except FileNotFoundError:pass
     # Legacy records can show mapped evidence without changing their saved data.
     d=json.loads(p['data'])
     if any('Page 1: alignment failed' in flag for flag in d.get('flags',[])):raise HTTPException(404,'Read the original PDF; alignment failed.')
@@ -265,8 +282,11 @@ def master_image(id:str,page:int,request:Request):
     user(request);require_row('exams',id)
     if page not in (0,1):raise HTTPException(404)
     p=DATA/'exams'/id/f'page-{page}.png'
-    if not available(p):raise HTTPException(404)
-    return FileResponse(materialize(p))
+    try:
+        resolved=materialize(p)
+        if not resolved.exists():raise FileNotFoundError
+        return FileResponse(resolved)
+    except FileNotFoundError:raise HTTPException(404)
 
 @app.get('/media/papers/{id}/{page}.png')
 def paper_image(id:str,page:int,request:Request):
@@ -282,7 +302,7 @@ def work_loop():
                 with db() as c:c.execute("UPDATE batches SET status='queued' WHERE status='processing'")
                 while not stop.is_set():
                     check_connection()
-                    with db() as c:b=c.execute("SELECT * FROM batches WHERE status='queued' ORDER BY created LIMIT 1").fetchone()
+                    with read_db() as c:b=c.execute("SELECT * FROM batches WHERE status='queued' ORDER BY created LIMIT 1").fetchone()
                     if not b:wake.wait(2);wake.clear();continue
                     try:process_batch(dict(b))
                     except Exception as e:
@@ -298,7 +318,7 @@ def process_batch(b):
     with fitz.open(materialize(folder/'source.pdf')) as doc:
         for idx in range(b['total']):
             if stop.is_set():return
-            with db() as c:exists=c.execute('SELECT 1 FROM papers WHERE batch_id=? AND idx=?',(b['id'],idx)).fetchone()
+            with read_db() as c:exists=c.execute('SELECT 1 FROM papers WHERE batch_id=? AND idx=?',(b['id'],idx)).fetchone()
             if exists:continue
             readings={k:empty_reading('Page alignment failed or field not mapped. Read the original PDF.') for k in FIELDS};fields={k:'' for k in FIELDS};answers=['?']*25;details=[{'reason':'Page alignment needs review','evidence':[]} for _ in range(25)];flags=[]
             for pageno in range(2):
@@ -326,7 +346,7 @@ def process_batch(b):
 @app.get('/api/batches/{id}/export/{kind}')
 def export(id:str,kind:str,request:Request):
     user(request);b=require_row('batches',id)
-    with db() as c:rows=c.execute("SELECT data,idx FROM papers WHERE batch_id=? AND status='approved' ORDER BY idx",(id,)).fetchall()
+    with read_db() as c:rows=c.execute("SELECT data,idx FROM papers WHERE batch_id=? AND status='approved' ORDER BY idx",(id,)).fetchall()
     rows=[r for r in rows if details_ready(json.loads(r['data']))]
     if not rows:raise HTTPException(400,'Approve at least one paper with all student details checked before exporting.')
     headers=['Student number']+FIELDS+['Science /40','Mathematics /40','Mental ability /20','Total /100','Correct','Blank']+[f'Q{i}' for i in range(1,26)]
@@ -338,7 +358,7 @@ def export(id:str,kind:str,request:Request):
 @app.get('/api/batches/{id}/students/{kind}')
 def student_export(id:str,kind:str,request:Request):
     user(request);require_row('batches',id)
-    with db() as c:rows=c.execute('SELECT id,idx,data FROM papers WHERE batch_id=? ORDER BY idx',(id,)).fetchall()
+    with read_db() as c:rows=c.execute('SELECT id,idx,data FROM papers WHERE batch_id=? ORDER BY idx',(id,)).fetchall()
     values=[]
     for row in rows:
         d=json.loads(row['data'])

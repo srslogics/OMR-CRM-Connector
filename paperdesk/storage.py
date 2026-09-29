@@ -10,6 +10,9 @@ import os
 import re
 import sqlite3
 import tempfile
+import threading
+import atexit
+import time
 
 ROOT = Path(__file__).parent
 DATA = Path(os.environ.get('PAPERDESK_DATA', ROOT / 'data')).resolve()
@@ -21,6 +24,10 @@ SCHEMA = os.environ.get('PAPERDESK_DB_SCHEMA', 'paperdesk')
 if not re.fullmatch(r'paperdesk(?:_test_[a-f0-9]+)?', SCHEMA):
     raise ValueError('Invalid database schema')
 FILE_BUDGET = int(os.environ.get('PAPERDESK_FILE_BUDGET_MB', '180')) * 1024 * 1024
+
+def lock_key(base):
+    # Preserve production locks across rolling upgrades; isolate test queues.
+    return base if SCHEMA=='paperdesk' else int.from_bytes(hashlib.sha256((SCHEMA+str(base)).encode()).digest()[:7], 'big')
 
 class StorageError(RuntimeError):
     pass
@@ -39,12 +46,48 @@ def pg_connect():
     return psycopg.connect(DATABASE_URL, sslmode='require', connect_timeout=15,
                            row_factory=row_factory, prepare_threshold=None)
 
+_pool = None
+_pool_lock = threading.Lock()
+
+def _configure_connection(conn):
+    conn.execute(f'SET search_path TO {SCHEMA}')
+    conn._paperdesk_checked_at = time.monotonic()
+
+def _check_connection(conn):
+    if time.monotonic()-getattr(conn,'_paperdesk_checked_at',0)>15:
+        from psycopg_pool import ConnectionPool
+        ConnectionPool.check_connection(conn)
+        conn._paperdesk_checked_at=time.monotonic()
+
+def connection_pool():
+    global _pool
+    if _pool is None:
+        with _pool_lock:
+            if _pool is None:
+                from psycopg_pool import ConnectionPool
+                _pool = ConnectionPool(DATABASE_URL, min_size=2, max_size=4,
+                    timeout=15, max_waiting=40, open=True,
+                    kwargs={'sslmode':'require', 'connect_timeout':15,
+                            'row_factory':row_factory, 'prepare_threshold':None, 'autocommit':True},
+                    configure=_configure_connection,
+                    check=_check_connection)
+    return _pool
+
+def close_pool():
+    global _pool
+    with _pool_lock:
+        pool, _pool = _pool, None
+    if pool is not None:
+        pool.close()
+
+atexit.register(close_pool)
+
 class PgConnection:
     def __init__(self, conn):
         self.conn = conn
     def execute(self, sql, params=()):
         if sql == 'BEGIN IMMEDIATE':
-            return self.conn.execute('SELECT pg_advisory_xact_lock(7392101)')
+            return self.conn.execute(f'SELECT pg_advisory_xact_lock({lock_key(7392101)})')
         return self.conn.execute(sql.replace('?', '%s'), params)
     def executescript(self, sql):
         for statement in sql.split(';'):
@@ -54,9 +97,9 @@ class PgConnection:
 @contextmanager
 def db():
     if REMOTE:
-        with pg_connect() as c:
-            c.execute(f'SET search_path TO {SCHEMA}')
-            yield PgConnection(c)
+        with connection_pool().connection() as c:
+            with c.transaction():
+                yield PgConnection(c)
     else:
         if os.environ.get('RENDER') == 'true':
             raise StorageError('Configure DATABASE_URL before using PaperDesk on Render. Local storage is temporary.')
@@ -68,6 +111,16 @@ def db():
                 yield c
         finally:
             c.close()
+
+@contextmanager
+def read_db():
+    """Read-only callers avoid a BEGIN/COMMIT network round trip."""
+    if REMOTE:
+        with connection_pool().connection() as c:
+            yield PgConnection(c)
+    else:
+        with db() as c:
+            yield c
 
 DDL = '''
 CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,name TEXT,email TEXT UNIQUE,password TEXT,salt TEXT);
@@ -81,7 +134,7 @@ CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY,paper_id TEXT,user_id IN
 def initialize():
     if REMOTE:
         with pg_connect() as c:
-            c.execute('SELECT pg_advisory_xact_lock(7392100)')
+            c.execute(f'SELECT pg_advisory_xact_lock({lock_key(7392100)})')
             c.execute(f'CREATE SCHEMA IF NOT EXISTS {SCHEMA}')
             c.execute(f'REVOKE ALL ON SCHEMA {SCHEMA} FROM PUBLIC')
             # Supabase browser/API roles must never read password hashes or scans.
@@ -110,7 +163,7 @@ def persist_files(c, paths):
     """Save evidence in the SAME transaction as the record that refers to it."""
     if not REMOTE:
         return
-    c.execute('SELECT pg_advisory_xact_lock(7392102)')
+    c.execute(f'SELECT pg_advisory_xact_lock({lock_key(7392102)})')
     used = c.execute('SELECT COALESCE(SUM(size),0) FROM files').fetchone()[0]
     for path in paths:
         path = Path(path)
@@ -126,7 +179,7 @@ def persist_files(c, paths):
 def available(path):
     if not REMOTE:
         return Path(path).exists()
-    with db() as c:
+    with read_db() as c:
         return bool(c.execute('SELECT 1 FROM files WHERE key=?', (file_key(path),)).fetchone())
 
 def materialize(path):
@@ -134,13 +187,13 @@ def materialize(path):
     path = Path(path)
     if not REMOTE:
         return path
-    with db() as c:
-        info = c.execute('SELECT digest FROM files WHERE key=?', (file_key(path),)).fetchone()
-        if not info:
+    with read_db() as c:
+        local_digest = hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
+        row = c.execute('SELECT digest, CASE WHEN digest=? THEN NULL ELSE content END AS content FROM files WHERE key=?', (local_digest,file_key(path))).fetchone()
+        if not row:
             raise FileNotFoundError('Stored document not found')
-        if path.exists() and hashlib.sha256(path.read_bytes()).hexdigest() == info['digest']:
+        if row['content'] is None:
             return path
-        row = c.execute('SELECT content,digest FROM files WHERE key=?', (file_key(path),)).fetchone()
     data = bytes(row['content'])
     if hashlib.sha256(data).hexdigest() != row['digest']:
         raise StorageError('Stored document integrity check failed')
@@ -163,11 +216,11 @@ def worker_leadership(stop):
     with pg_connect() as c:
         c.autocommit = True
         while not stop.is_set():
-            if c.execute('SELECT pg_try_advisory_lock(7392103)').fetchone()[0]:
+            if c.execute(f'SELECT pg_try_advisory_lock({lock_key(7392103)})').fetchone()[0]:
                 try:
                     yield lambda: c.execute('SELECT 1')
                 finally:
-                    c.execute('SELECT pg_advisory_unlock(7392103)')
+                    c.execute(f'SELECT pg_advisory_unlock({lock_key(7392103)})')
                 return
             stop.wait(1)
         yield None

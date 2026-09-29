@@ -49,6 +49,13 @@ class Integration(unittest.TestCase):
     time.sleep(.2)
    self.assertEqual(b['status'],'ready',b)
    self.assertEqual(len(b['papers']),3)
+   compact=client.get(f'/api/batches/{bid}?summary=1').json()
+   self.assertEqual(len(compact['papers']),3)
+   for full,small in zip(b['papers'],compact['papers']):
+    self.assertEqual(small['data'],{k:full['data'][k] for k in ('fields','score')})
+    self.assertEqual(small['details_ready'],full['details_ready'])
+   self.assertFalse(client.get('/api/session').json()['setup_required'])
+   self.assertIsNotNone(client.get('/api/session').json()['user'])
    first,second,third=b['papers'];print('Detected scores:',[(p['data']['score']) for p in b['papers']])
    self.assertEqual(first['data']['answers'],KEY)
    self.assertEqual(first['data']['fields']['name'].casefold(),'first test')

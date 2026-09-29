@@ -36,3 +36,11 @@ Detail extraction, registration and writing crops took approximately 7 seconds f
 - A headless Chrome browser check used synthetic records: eight field cards, crop enlargement, confirmation reset after editing, saving, details-only Excel download before marks approval, desktop (1440 px) and mobile (390 px). No script errors or mobile page overflow were found. Screenshots were inspected locally.
 
 The MVP limit remains 15 students (30 pages) per batch; start with 10. No live Render deployment or performance claim follows from these local checks.
+
+## Database latency update — 2026-09-29
+
+Reused 2–4 PostgreSQL connections, single-query session lookup, autocommit reads, one-query cached-file validation/retrieval, batched dashboard counts and compact batch summaries. Writes remain transactional. Polling is limited to one outstanding progress request, skips hidden tabs and ignores responses after navigation.
+
+Five sequential read-only comparisons from the development machine to the configured Supabase session pooler: previous two-connection account lookup median 688 ms; warmed pooled single-query lookup median 27 ms. These measure database work, not live Render HTTP latency or OCR throughput. No production records were modified for this benchmark.
+
+Passed: four local integration tests; four integration tests against an isolated PostgreSQL test schema; persistence/pool reuse/cache replacement/rollback check; setup-dialog regression checks; overlapping polling/navigation/hidden-tab/completion checks. Scan routes continue checking authentication; no public scan cache was introduced. Render cold starts are unaffected.
