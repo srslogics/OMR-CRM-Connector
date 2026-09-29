@@ -45,24 +45,97 @@ def crop(im,r):
     h,w=im.shape[:2];x,y,rw,rh=r
     return im[max(0,int(y*h)):min(h,int((y+rh)*h)),max(0,int(x*w)):min(w,int((x+rw)*w))]
 
-def detect_question(image,template,regions):
-    # Ignore small registration noise by subtracting an expanded template ink mask.
-    vals=[]
-    for r in regions:
-        a=crop(image,r);b=crop(template,r)
-        if a.size==0 or b.size==0:return {'answer':'?','reason':'Invalid answer region','evidence':[]}
-        ag=cv2.cvtColor(a,cv2.COLOR_BGR2GRAY);bg=cv2.cvtColor(b,cv2.COLOR_BGR2GRAY)
-        ink=ag<155; old=cv2.dilate((bg<175).astype('uint8'),np.ones((3,3),np.uint8))>0
-        new=(ink & ~old).astype('uint8');n,_,stats,_=cv2.connectedComponentsWithStats(new,8)
-        largest=int(max(stats[1:,cv2.CC_STAT_AREA],default=0))
-        vals.append({'ratio':round(float(new.mean()),4),'pixels':largest})
-    marked=[i for i,v in enumerate(vals) if v['ratio']>=.025 and v['pixels']>=8]
-    faint=any(v['ratio']>=.009 and v['pixels']>=4 for v in vals)
-    if len(marked)==1:answer='ABCD'[marked[0]];reason='One detected mark; verify against scan'
-    elif len(marked)>1:answer='?';reason='Multiple marks or correction'
-    elif faint:answer='?';reason='Faint or uncertain mark'
-    else:answer='-';reason='No mark detected; verify blank'
-    return {'answer':answer,'reason':reason,'evidence':vals}
+MARK_READER_VERSION = 2
+
+def ink_contrast(image):
+    """Remove slow lighting/shadow changes without inventing missing strokes."""
+    gray=cv2.cvtColor(image,cv2.COLOR_BGR2GRAY)
+    size=max(9,round(image.shape[1]/1100*19))|1
+    background=cv2.morphologyEx(gray,cv2.MORPH_CLOSE,np.ones((size,size),np.uint8))
+    return cv2.subtract(background,gray)
+
+def detect_question(image,template,regions,prepared=None):
+    """Read scan evidence only. The answer key is deliberately not an input.
+
+    Global registration cannot compensate for every curved page. Match nearby
+    printed structure, subtract normalized print, and require ink inside a box
+    so a long tick tail does not select the option above it. Abstain on blanks:
+    an invisible/faint/off-box mark is not evidence of an unanswered question.
+    """
+    unknown=lambda reason: {'answer':'?','reason':reason,'evidence':[]}
+    if image.shape[:2]!=template.shape[:2] or len(regions)!=4:
+        return unknown('Answer areas do not match this scan; check the template.')
+    a,b=prepared if prepared is not None else (ink_contrast(image),ink_contrast(template))
+    h,w=a.shape;scale=w/1100
+    boxes=[(int(x*w),int(y*h),int((x+rw)*w),int((y+rh)*h)) for x,y,rw,rh in regions]
+    search=max(3,round(8*scale));pad=max(10,round(22*scale))
+    x1=max(search,min(r[0] for r in boxes)-pad);y1=max(search,min(r[1] for r in boxes)-pad)
+    x2=min(w-search,max(r[2] for r in boxes)+pad);y2=min(h-search,max(r[3] for r in boxes)+pad)
+    if x2<=x1 or y2<=y1:return unknown('Invalid answer area; check the template.')
+    ref=b[y1:y2,x1:x2];src=a[y1-search:y2+search,x1-search:x2+search]
+    if np.std(ref)<3:return unknown('No usable printed structure in the answer area.')
+    # Match expected printed ink against scan ink; additional pen strokes must
+    # not pull registration towards another option or lower the match quality.
+    printed=(ref>40).astype('float32')
+    if printed.sum()<20:return unknown('Too little printed structure to align this question.')
+    distance=cv2.distanceTransform((src<=20).astype('uint8'),cv2.DIST_L2,3)
+    missing=cv2.matchTemplate(np.minimum(distance,4),printed,cv2.TM_CCORR)/printed.sum()
+    yy,xx=np.mgrid[-search:search+1,-search:search+1]
+    cost=missing+.002*(xx*xx+yy*yy)
+    _,_,location,_=cv2.minMaxLoc(cost)
+    dx,dy=location[0]-search,location[1]-search
+    correlation=max(0.,1.-float(missing[location[1],location[0]])/2)
+    if correlation<.6 or abs(dx)==search or abs(dy)==search:
+        return unknown('Local alignment is uncertain; inspect the original scan.')
+    vals=[];unit=max(.6,scale*scale)
+    for x,y,xx,yy in boxes:
+        if min(x+dx,y+dy)<0 or xx+dx>w or yy+dy>h or xx<=x or yy<=y:
+            return unknown('Answer area is outside the scan.')
+        ag=a[y+dy:yy+dy,x+dx:xx+dx];bg=b[y:yy,x:xx]
+        border=max(1,round(scale));kernel=np.ones((border*2+1,border*2+1),np.uint8)
+        old=cv2.dilate((bg>30).astype('uint8'),kernel)>0
+        added=((ag>27)&~old).astype('uint8')
+        # Locate a closed checkbox in the blank master, not in the marked scan.
+        contours,_=cv2.findContours((bg>30).astype('uint8'),cv2.RETR_LIST,cv2.CHAIN_APPROX_SIMPLE)
+        candidates=[]
+        for contour in contours:
+            bx,by,bw,bh=cv2.boundingRect(contour);area=cv2.contourArea(contour)
+            if bw>=5*scale and bh>=5*scale and .35<bw/bh<1.7 and area>bw*bh*.55 and bw<bg.shape[1]*.85 and bh<bg.shape[0]*.95:
+                candidates.append((area,bx,by,bw,bh))
+        anchor_pixels=0
+        if candidates:
+            _,bx,by,bw,bh=max(candidates);inset=max(1,round(2*scale))
+            anchor_pixels=int(added[by+inset:by+bh-inset,bx+inset:bx+bw-inset].sum())
+        _,_,stats,_=cv2.connectedComponentsWithStats(added,8)
+        vals.append({'ratio':round(float(added.mean()),4),
+                     'pixels':int(max(stats[1:,cv2.CC_STAT_AREA],default=0)),
+                     'inside_pixels':anchor_pixels,'box_found':bool(candidates)})
+    marked=[i for i,v in enumerate(vals) if v['ratio']>=.018 and v['pixels']>=7*unit and v['inside_pixels']>=3*unit]
+    # A second weak interior mark may be a correction. Do not silently pick it away.
+    competing=[i for i,v in enumerate(vals) if v['ratio']>=.009 and v['pixels']>=4*unit and v['inside_pixels']>=2*unit]
+    if len(marked)==1 and all(i==marked[0] for i in competing):
+        answer='ABCD'[marked[0]];reason='Single mark after brightness and local alignment correction; verify scan.'
+    elif len(marked)>1:
+        answer='?';reason='Multiple marks or correction; review the scan.'
+    elif any(v['pixels']>=4*unit for v in vals):
+        answer='?';reason='Faint, off-box or conflicting ink; review before scoring.'
+    else:
+        answer='?';reason='No reliable mark found; confirm a blank from the scan.'
+    return {'answer':answer,'reason':reason,'evidence':vals,
+            'local_shift':[dx,dy],'alignment':round(float(correlation),3)}
+
+def detect_page(image,template,mapping,page):
+    prepared=(ink_contrast(image),ink_contrast(template))
+    return {int(q)-1:detect_question(image,template,m['boxes'],prepared)
+            for q,m in mapping.items() if m['page']==page}
+
+def reread_data(old,detected,key,protected=()):
+    """Keep saved human choices and student details when refreshing suggestions."""
+    overrides=set(old.get('answer_overrides',[]))|set(protected)
+    answers=[old['answers'][i] if i in overrides else detected[i]['answer'] for i in range(25)]
+    return {**old,'answers':answers,'details':detected,'score':score(answers,key),
+            'answer_overrides':sorted(overrides),'detected_answers':[d['answer'] for d in detected],
+            'mark_reader_version':MARK_READER_VERSION,'reread_requested':False}
 
 _ocr_engine = None
 

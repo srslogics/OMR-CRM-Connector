@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 import cv2
 import pymupdf as fitz
-from processor import raster,align,detail_pixels,detect_question,score,validate_config,FIELDS,ocr_available,crop
+from processor import raster,align,detail_pixels,detect_question,detect_page,score,validate_config,FIELDS,ocr_available,crop,ink_contrast,reread_data,MARK_READER_VERSION
 from student_details import extract_details,empty_reading,normalise_reviews,details_ready,evidence_rect
 from setup_ocr import MODEL
 
@@ -204,6 +204,55 @@ def retry(id:str,request:Request):
     with db() as c:c.execute("UPDATE batches SET status='queued',error='' WHERE id=?",(id,))
     wake.set();return {'ok':True}
 
+mark_reread_lock=threading.Lock()
+
+def protected_answers(connection,paper_id):
+    # Older versions did not explicitly record overrides; recover them from audit.
+    protected=set()
+    for event in connection.execute('SELECT before_data,after_data FROM audit WHERE paper_id=?',(paper_id,)).fetchall():
+        before=json.loads(event['before_data']);after=json.loads(event['after_data'])
+        if after.get('mark_reread_event'):continue
+        protected.update(i for i,(a,b) in enumerate(zip(before.get('answers',[]),after.get('answers',[]))) if a!=b)
+    return protected
+
+def read_mark_suggestions(doc,idx,masters,conf):
+    detected=[{'answer':'?','reason':'Page alignment failed; check the original PDF.','evidence':[]} for _ in range(25)]
+    for page in range(2):
+        aligned,quality=align(raster(doc[2*idx+page]),masters[page])
+        if aligned is None:continue
+        for q,d in detect_page(aligned,masters[page],conf['mapping'],page).items():detected[q]=d
+    return detected
+
+def save_mark_reread(p,detected,key,user_id):
+    # Compare-and-swap prevents a concurrent review or approval being overwritten.
+    with db() as c:
+        old=json.loads(p['data']);new=reread_data(old,detected,key,protected_answers(c,p['id']))
+        new['mark_reread_at']=time.time()
+        cur=c.execute("UPDATE papers SET data=?,version=version+1 WHERE id=? AND version=? AND status!='approved'",
+                      (json.dumps(new),p['id'],p['version']))
+        if cur.rowcount!=1:return False
+        audit_after={**new,'mark_reread_event':True}
+        c.execute('INSERT INTO audit(paper_id,user_id,at,before_data,after_data) VALUES(?,?,?,?,?)',
+                  (p['id'],user_id,time.time(),p['data'],json.dumps(audit_after)))
+    return True
+
+@app.post('/api/batches/{id}/reread-marks')
+def reread_marks(id:str,request:Request):
+    u=user(request);b=require_row('batches',id)
+    if b['status'] not in ('ready','failed'):raise HTTPException(409,'Wait for this batch to finish processing first.')
+    if not mark_reread_lock.acquire(blocking=False):raise HTTPException(409,'An answer reread is already running. Please wait.')
+    try:
+        e=require_row('exams',b['exam_id']);conf=json.loads(e['config'])
+        masters=[cv2.imread(str(materialize(DATA/'exams'/e['id']/f'page-{i}.png'))) for i in range(2)]
+        with read_db() as c:papers=[dict(p) for p in c.execute("SELECT * FROM papers WHERE batch_id=? AND status!='approved' ORDER BY idx",(id,)).fetchall()]
+        updated=0
+        with fitz.open(materialize(DATA/'batches'/id/'source.pdf')) as doc:
+            for p in papers:
+                detected=read_mark_suggestions(doc,p['idx'],masters,conf)
+                updated+=save_mark_reread(p,detected,conf['key'],u['id'])
+        return {'updated':updated,'skipped':len(papers)-updated}
+    finally:mark_reread_lock.release()
+
 @app.get('/api/papers/{id}')
 def paper(id:str,request:Request):
     user(request);p=paper_payload(require_row('papers',id));b=require_row('batches',p['batch_id']);e=require_row('exams',b['exam_id']);p['exam']=dict(e,config=json.loads(e['config']));return p
@@ -212,6 +261,29 @@ def paper_payload(p):
     p['data']=json.loads(p['data']);p['details_ready']=details_ready(p['data'])
     if p['status']=='approved' and not p['details_ready']:p['status']='review'
     return p
+
+@app.get('/media/papers/{id}/answers/{question}.png')
+def answer_evidence(id:str,question:int,request:Request):
+    user(request)
+    if not 1<=question<=25:raise HTTPException(404,'Unknown question')
+    p=require_row('papers',id);b=require_row('batches',p['batch_id']);e=require_row('exams',b['exam_id'])
+    conf=json.loads(e['config']);m=conf['mapping'][str(question)]
+    im=cv2.imread(str(materialize(DATA/'batches'/b['id']/f"{p['idx']}-{m['page']}.png")))
+    if im is None:raise HTTPException(404,'Scan not available')
+    parts=[];h,w=im.shape[:2]
+    for option,r in zip('ABCD',m['boxes']):
+        x,y,rw,rh=r;pad=12
+        cut=im[max(0,int(y*h)-pad):min(h,int((y+rh)*h)+pad),max(0,int(x*w)-pad):min(w,int((x+rw)*w)+pad)]
+        if not cut.size:raise HTTPException(400,'Invalid answer area')
+        original=cv2.resize(cut,None,fx=3,fy=3,interpolation=cv2.INTER_CUBIC)
+        enhanced=cv2.cvtColor(cv2.createCLAHE(clipLimit=2.,tileGridSize=(4,4)).apply(cv2.cvtColor(original,cv2.COLOR_BGR2GRAY)),cv2.COLOR_GRAY2BGR)
+        panel=cv2.copyMakeBorder(cv2.hconcat([original,enhanced]),28,8,8,8,cv2.BORDER_CONSTANT,value=(255,255,255))
+        cv2.putText(panel,option+'   Scan / contrast view',(8,19),cv2.FONT_HERSHEY_SIMPLEX,.45,(35,35,35),1)
+        parts.append(panel)
+    width=max(p.shape[1] for p in parts)
+    parts=[cv2.copyMakeBorder(p,0,0,0,width-p.shape[1],cv2.BORDER_CONSTANT,value=(255,255,255)) for p in parts]
+    ok,encoded=cv2.imencode('.png',cv2.vconcat(parts))
+    return Response(encoded.tobytes(),media_type='image/png')
 
 @app.put('/api/papers/{id}')
 async def review(id:str,request:Request):
@@ -223,7 +295,8 @@ async def review(id:str,request:Request):
     if approve and ('?' in answers or not fields['name'] or incoming.get('pairing_verified') is not True):raise HTTPException(400,'Resolve every answer, enter the student name and verify page pairing before approval.')
     try:reviews=normalise_reviews(incoming.get('field_review',old.get('field_review',{})),fields)
     except ValueError as error:raise HTTPException(400,str(error))
-    e=require_row('exams',require_row('batches',p['batch_id'])['exam_id']);new={**old,'answers':answers,'fields':fields,'field_review':reviews,'score':score(answers,json.loads(e['config'])['key']),'pairing_verified':incoming.get('pairing_verified') is True}
+    overrides=set(old.get('answer_overrides',[]))|{i for i,(a,b) in enumerate(zip(old['answers'],answers)) if a!=b}
+    e=require_row('exams',require_row('batches',p['batch_id'])['exam_id']);new={**old,'answer_overrides':sorted(overrides),'answers':answers,'fields':fields,'field_review':reviews,'score':score(answers,json.loads(e['config'])['key']),'pairing_verified':incoming.get('pairing_verified') is True}
     if approve and not details_ready(new):raise HTTPException(400,'Check all 8 student fields. Confirm each value, or mark it blank or unreadable, before approving.')
     with db() as c:
         cur=c.execute('UPDATE papers SET data=?,status=?,version=version+1 WHERE id=? AND version=?',(json.dumps(new),'approved' if approve else 'review',id,incoming.get('version')))
@@ -327,16 +400,15 @@ def process_batch(b):
                     flags.append(f'Page {pageno+1}: alignment failed; check page order and scan quality.')
                     cv2.imwrite(str(folder/f'{idx}-{pageno}.png'),im);continue
                 cv2.imwrite(str(folder/f'{idx}-{pageno}.png'),aligned)
-                for q,m in conf['mapping'].items():
-                    if m['page']!=pageno:continue
-                    d=detect_question(aligned,masters[pageno],m['boxes']);answers[int(q)-1]=d['answer'];details[int(q)-1]=d
+                for q,d in detect_page(aligned,masters[pageno],conf['mapping'],pageno).items():
+                    answers[q]=d['answer'];details[q]=d
                 if pageno==0:
                     pixels,reference=detail_pixels(doc[idx*2],im,masters[0],transform)
                     readings=extract_details(pixels,reference,conf.get('fields',{}),folder,idx)
                     fields={k:readings[k]['suggested'] for k in FIELDS}
                     del pixels,reference
             flags.append('Verify student details, both pages and all detected answers before approving.')
-            data={'fields':fields,'field_ocr':readings,'field_review':{},'answers':answers,'details':details,'flags':flags,'pairing_verified':False,'score':score(answers,conf['key'])}
+            data={'mark_reader_version':MARK_READER_VERSION,'detected_answers':list(answers),'answer_overrides':[],'fields':fields,'field_ocr':readings,'field_review':{},'answers':answers,'details':details,'flags':flags,'pairing_verified':False,'score':score(answers,conf['key'])}
             with db() as c:
                 persist_files(c,sorted(folder.glob(f'{idx}-*.png')))
                 c.execute('INSERT INTO papers VALUES(?,?,?,?,?,1)',(uuid.uuid4().hex,b['id'],idx,json.dumps(data),'review'))

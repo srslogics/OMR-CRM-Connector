@@ -62,7 +62,7 @@ class Integration(unittest.TestCase):
    self.assertEqual(client.get(f'/api/batches/{bid}/source').status_code,200)
    self.assertEqual(first['data']['score']['total'],100)
    self.assertEqual(second['data']['score']['total'],76)
-   self.assertEqual(third['data']['answers'][4],'-')
+   self.assertEqual(third['data']['answers'][4],'?')
    self.assertEqual(third['data']['answers'][19],'?')
    self.assertEqual(client.get(f'/api/batches/{bid}/export/csv').status_code,400)
    review={'answers':first['data']['answers'],'fields':{'name':'First Test'},'approve':True,'version':1,'pairing_verified':False}
@@ -99,6 +99,20 @@ class Integration(unittest.TestCase):
    self.assertEqual(client.post(f'/api/papers/{pid}/extract-details?version=1').status_code,409)
    self.assertEqual(client.post(f'/api/papers/{pid}/extract-details?version=3').status_code,200)
    after=client.get(f'/api/papers/{pid}').json();self.assertEqual(after['data']['fields']['name'],'Reviewed Synthetic Student');self.assertEqual(after['data']['fields']['father_mobile'],'9000099999');self.assertEqual(after['status'],'review')
+   # Re-reading answers keeps approved results, manual corrections and identity checks.
+   before_first=client.get(f'/api/papers/{first["id"]}').json()
+   current=client.get(f'/api/papers/{pid}').json()
+   edited=list(current['data']['answers']);edited[0]='D'
+   edit={'answers':edited,'fields':current['data']['fields'],'field_review':current['data']['field_review'],'pairing_verified':True,'approve':False,'version':current['version']}
+   self.assertEqual(client.put(f'/api/papers/{pid}',json=edit).status_code,200)
+   reread=client.post(f'/api/batches/{bid}/reread-marks')
+   self.assertEqual(reread.status_code,200,reread.text);self.assertEqual(reread.json()['updated'],2)
+   self.assertEqual(client.get(f'/api/papers/{first["id"]}').json(),before_first)
+   reread_paper=client.get(f'/api/papers/{pid}').json()
+   self.assertEqual(reread_paper['data']['answers'][0],'D')
+   self.assertEqual(reread_paper['data']['fields'],current['data']['fields'])
+   self.assertEqual(client.get(f'/media/papers/{pid}/answers/1.png').status_code,200)
+   self.assertEqual(client.get(f'/media/papers/{pid}/answers/26.png').status_code,404)
    # Legacy approvals must acquire the new field checks before release.
    with db() as c:
     legacy=dict(first['data']);legacy['pairing_verified']=True
@@ -124,6 +138,8 @@ class Integration(unittest.TestCase):
    self.assertEqual(client.get(f'/media/papers/{pid}/fields/name.png').status_code,401)
    self.assertEqual(client.get(f'/api/batches/{bid}/students/csv').status_code,401)
    self.assertEqual(client.post(f'/api/papers/{pid}/extract-details?version=4').status_code,401)
+   self.assertEqual(client.post(f'/api/batches/{bid}/reread-marks').status_code,401)
+   self.assertEqual(client.get(f'/media/papers/{pid}/answers/1.png').status_code,401)
    self.assertEqual(client.post('/api/login',json={'email':'operator@example.test','password':'wrong'}).status_code,401)
    self.assertEqual(client.post('/api/login',json={'email':'operator@example.test','password':'long-test-password'}).status_code,200)
  def test_scoring(self):

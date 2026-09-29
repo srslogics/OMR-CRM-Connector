@@ -44,3 +44,11 @@ Reused 2–4 PostgreSQL connections, single-query session lookup, autocommit rea
 Five sequential read-only comparisons from the development machine to the configured Supabase session pooler: previous two-connection account lookup median 688 ms; warmed pooled single-query lookup median 27 ms. These measure database work, not live Render HTTP latency or OCR throughput. No production records were modified for this benchmark.
 
 Passed: four local integration tests; four integration tests against an isolated PostgreSQL test schema; persistence/pool reuse/cache replacement/rollback check; setup-dialog regression checks; overlapping polling/navigation/hidden-tab/completion checks. Scan routes continue checking authentication; no public scan cache was introduced. Render cold starts are unaffected.
+
+## Faint-mark reader (2026-09-29)
+
+- Local brightness normalization and printed-ink registration replace the fixed darkness cutoff. Interior checkbox evidence separates tick tails from answer selections. The official answer key is never provided to detection.
+- Unreadable, missing, off-box, conflicting or poorly aligned marks produce `?`, not an automatically scored blank. Staff may still confirm a blank or a genuine zero. Unapproved zero totals are displayed as pending review; other draft totals are labelled incomplete when necessary.
+- Added authenticated original/contrast answer crops and batch rereading. Approved papers are skipped; manual answer changes (including legacy audit history), student fields and field confirmations are preserved. Version comparisons prevent overwriting concurrent reviews. Rereads are audited.
+- Synthetic tests cover faint grey ink above the old darkness threshold, uneven lighting, translation, two marks, missing evidence, genuine zero scoring, manual correction preservation, approval protection and authenticated evidence access. This is not a claim of fully automated accuracy on handwritten papers.
+- The private 20-page pilot was inspected separately, including both prior zero-score papers. No real student scans or identities are included in repository fixtures. Some students tick beside printed answer labels instead of checkboxes; these still require review in the full scan.
