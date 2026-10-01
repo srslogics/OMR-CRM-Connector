@@ -5,6 +5,24 @@ import numpy as np
 from processor import detect_question,reread_data,score
 
 class MarkReading(unittest.TestCase):
+ def test_resolution_disagreement_never_silently_overwrites(self):
+  from processor import combine_resolution_reads
+  first={0:{'answer':'A','confidence':'strong'}}
+  second={0:{'answer':'B','confidence':'strong'}}
+  d=combine_resolution_reads(first,second)[0]
+  self.assertEqual(d['answer'],'?');self.assertEqual(d['confidence'],'review')
+  self.assertEqual(first[0]['answer'],'A')
+ def test_resolution_recovery_requires_strong_evidence_and_remains_reviewable(self):
+  from processor import combine_resolution_reads
+  first={0:{'answer':'?','confidence':'review'},1:{'answer':'?','confidence':'review'}}
+  second={0:{'answer':'B','confidence':'strong'},1:{'answer':'A','confidence':'review'}}
+  d=combine_resolution_reads(first,second)
+  self.assertEqual(d[0]['answer'],'B');self.assertEqual(d[0]['confidence'],'review')
+  self.assertEqual(d[1]['answer'],'?')
+ def test_resolution_cannot_discard_conflicting_text_suggestion(self):
+  from processor import combine_resolution_reads
+  d=combine_resolution_reads({0:{'answer':'?','suggested_answer':'D'}},{0:{'answer':'B','confidence':'strong'}})
+  self.assertEqual(d[0]['answer'],'?')
  def fixture(self):
   image=np.full((350,1100,3),235,np.uint8);regions=[]
   for i in range(4):

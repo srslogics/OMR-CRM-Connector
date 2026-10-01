@@ -45,7 +45,7 @@ def crop(im,r):
     h,w=im.shape[:2];x,y,rw,rh=r
     return im[max(0,int(y*h)):min(h,int((y+rh)*h)),max(0,int(x*w)):min(w,int((x+rw)*w))]
 
-MARK_READER_VERSION = 4
+MARK_READER_VERSION = 5
 
 def ink_contrast(image):
     """Remove slow lighting/shadow changes without inventing missing strokes."""
@@ -251,6 +251,44 @@ def detect_page(image,template,mapping,page):
     prepared=(ink_contrast(image),ink_contrast(template))
     return {int(q)-1:detect_question(image,template,m['boxes'],prepared)
             for q,m in mapping.items() if m['page']==page}
+
+def combine_resolution_reads(first, second):
+    """A second rendering may recover fine strokes, but cannot erase a conflict.
+
+    Recovery requires strong checkbox evidence, not a text-side suggestion.
+    Recovered choices stay reviewable; this is not an automatic approval rule.
+    """
+    result = dict(first)
+    for q, extra in second.items():
+        original = first.get(q)
+        if original is None:
+            continue
+        a, b = original['answer'], extra['answer']
+        evidence = {'answer': b, 'confidence': extra.get('confidence'),
+                    'reason': extra.get('reason'), 'checkbox_evidence': extra.get('checkbox_evidence')}
+        result[q] = {**original, 'second_resolution': evidence}
+        if a != '?' and b != '?' and a != b:
+            result[q].update(answer='?', confidence='review',
+                             reason='Different resolutions disagree; inspect the original scan.')
+        elif a == '?' and b != '?' and extra.get('confidence') == 'strong':
+            # A conflicting text-side reading still needs a person to resolve it.
+            if original.get('suggested_answer') not in (None, b):
+                continue
+            result[q].update(answer=b, confidence='review',
+                             reason='Fine checkbox strokes recovered at higher resolution; verify the scan.')
+    return result
+
+def detect_page_with_retry(source_page, image, template, mapping, page, high_template):
+    """Retry only pages containing exceptions, keeping one high-res page in memory."""
+    first = detect_page(image, template, mapping, page)
+    if high_template is None or not any(d.get('confidence') != 'strong' for d in first.values()):
+        return first
+    high, quality = align(raster(source_page, 3.4), high_template)
+    if high is None:
+        return {q: {**d, 'second_resolution': {'reason': 'Higher-resolution alignment failed.'}}
+                for q, d in first.items()}
+    second = detect_page(high, high_template, mapping, page)
+    return combine_resolution_reads(first, second)
 
 def reread_data(old,detected,key,protected=()):
     """Keep saved human choices and student details when refreshing suggestions."""

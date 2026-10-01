@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 import cv2
 import pymupdf as fitz
-from processor import raster,align,detail_pixels,detect_question,detect_page,score,validate_config,FIELDS,ocr_available,crop,ink_contrast,reread_data,MARK_READER_VERSION
+from processor import raster,align,detail_pixels,detect_question,detect_page,detect_page_with_retry,score,validate_config,FIELDS,ocr_available,crop,ink_contrast,reread_data,MARK_READER_VERSION
 from student_details import extract_details,empty_reading,normalise_reviews,details_ready,evidence_rect
 from setup_ocr import MODEL
 
@@ -202,7 +202,7 @@ def review_audit(id:str,request:Request):
     user(request);require_row('batches',id)
     from review_audit import comparison
     with read_db() as c:
-        rows=c.execute('SELECT status,data FROM papers WHERE batch_id=? ORDER BY idx',(id,)).fetchall()
+        rows=c.execute('SELECT idx,status,data FROM papers WHERE batch_id=? ORDER BY idx',(id,)).fetchall()
     return comparison(rows)
 
 @app.post('/api/batches/{id}/retry')
@@ -223,12 +223,12 @@ def protected_answers(connection,paper_id):
         protected.update(i for i,(a,b) in enumerate(zip(before.get('answers',[]),after.get('answers',[]))) if a!=b)
     return protected
 
-def read_mark_suggestions(doc,idx,masters,conf):
+def read_mark_suggestions(doc,idx,masters,conf,high_masters=None):
     detected=[{'answer':'?','reason':'Page alignment failed; check the original PDF.','evidence':[]} for _ in range(25)]
     for page in range(2):
         aligned,quality=align(raster(doc[2*idx+page]),masters[page])
         if aligned is None:continue
-        for q,d in detect_page(aligned,masters[page],conf['mapping'],page).items():detected[q]=d
+        for q,d in detect_page_with_retry(doc[2*idx+page],aligned,masters[page],conf['mapping'],page,high_masters[page] if high_masters else None).items():detected[q]=d
     return detected
 
 def save_mark_reread(p,detected,key,user_id):
@@ -254,9 +254,11 @@ def reread_marks(id:str,request:Request):
         masters=[cv2.imread(str(materialize(DATA/'exams'/e['id']/f'page-{i}.png'))) for i in range(2)]
         with read_db() as c:papers=[dict(p) for p in c.execute("SELECT * FROM papers WHERE batch_id=? AND status!='approved' ORDER BY idx",(id,)).fetchall()]
         updated=0
+        with fitz.open(materialize(DATA/'exams'/e['id']/'template.pdf')) as master_doc:
+            high_masters=[raster(p,3.4) for p in master_doc] if papers else None
         with fitz.open(materialize(DATA/'batches'/id/'source.pdf')) as doc:
             for p in papers:
-                detected=read_mark_suggestions(doc,p['idx'],masters,conf)
+                detected=read_mark_suggestions(doc,p['idx'],masters,conf,high_masters)
                 updated+=save_mark_reread(p,detected,conf['key'],u['id'])
         return {'updated':updated,'skipped':len(papers)-updated}
     finally:mark_reread_lock.release()
@@ -402,6 +404,8 @@ def work_loop():
 def process_batch(b):
     e=require_row('exams',b['exam_id']);conf=json.loads(e['config']);folder=DATA/'batches'/b['id'];masters=[cv2.imread(str(materialize(DATA/'exams'/e['id']/f'page-{i}.png'))) for i in range(2)]
     with db() as c:c.execute("UPDATE batches SET status='processing',error='' WHERE id=?",(b['id'],))
+    with fitz.open(materialize(DATA/'exams'/e['id']/'template.pdf')) as master_doc:
+        high_masters=[raster(p,3.4) for p in master_doc]
     with fitz.open(materialize(folder/'source.pdf')) as doc:
         for idx in range(b['total']):
             if stop.is_set():return
@@ -414,7 +418,7 @@ def process_batch(b):
                     flags.append(f'Page {pageno+1}: alignment failed; check page order and scan quality.')
                     cv2.imwrite(str(folder/f'{idx}-{pageno}.png'),im);continue
                 cv2.imwrite(str(folder/f'{idx}-{pageno}.png'),aligned)
-                for q,d in detect_page(aligned,masters[pageno],conf['mapping'],pageno).items():
+                for q,d in detect_page_with_retry(doc[idx*2+pageno],aligned,masters[pageno],conf['mapping'],pageno,high_masters[pageno]).items():
                     answers[q]=d['answer'];details[q]=d
                 if pageno==0:
                     pixels,reference=detail_pixels(doc[idx*2],im,masters[0],transform)

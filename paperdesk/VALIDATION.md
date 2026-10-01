@@ -104,3 +104,38 @@ papers from each class and scan source, measure strong-read errors and unresolve
 rates separately, and load-test persistent resumable processing before raising
 limits. The original two-page pairing assumption must be validated for each
 source; missing/reordered pages cannot be inferred from this ten-student sample.
+
+## Higher-resolution retry and detailed audit — 2026-10-02
+
+Reader v5 retries pages containing exceptions at twice the rendering resolution.
+The second page registration must independently succeed. A disagreement between
+selected answers becomes unresolved. Recovery requires strong checkbox evidence
+and no conflicting text-side suggestion; recovered answers remain reviewable.
+The key and client reference values never enter inference. Both normal processing
+and unapproved-paper rereads use the same retry path as the offline benchmark.
+
+The ten-paper calibration benchmark gives **159 matched, 91 unresolved, zero
+different selections out of 250** (v4: 151, 99, zero). Eight additional matches
+were recovered. The 108 strong primary readings are unchanged. Runtime was 9.42
+seconds locally for mark inference; this excludes OCR, upload, database writes
+and staff review and does not predict Render Free throughput. This is still a
+calibration set, not a holdout or a basis for automatic release.
+
+The review audit now includes per-student question differences, recorded failure
+reasons and names of fields needing correction. It compares historical stored
+readings, explicitly distinguished from a fresh v5 rerun. Missing machine
+history for the first approved paper remains reported as unavailable. No client
+names, phone values or scans are committed to Git.
+
+A trial of tighter per-field registration recovered only 37/75 verified fields,
+versus 45/75 saved suggestions. That experiment was rejected; student OCR is
+unchanged. Of 30 historical field misses, only four had the correct value among
+existing alternatives. Better handwriting recognition and independent examples
+remain necessary. Do not relabel these fields as confident.
+
+Passed 20 unit/integration tests, JavaScript syntax validation and four UI
+regression suites. Tests cover resolution disagreement, weak retry rejection,
+text/checkbox conflict, reviewed-value preservation, approval protection,
+SQLite-compatible audit rows and per-student correction counts. The 15-student
+limit and approval requirements remain unchanged. Approved pilot records were
+not rewritten.

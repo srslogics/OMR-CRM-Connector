@@ -9,7 +9,7 @@ import json
 import time
 from pathlib import Path
 import pymupdf
-from processor import raster, align, detect_page, MARK_READER_VERSION
+from processor import raster, align, detect_page_with_retry, MARK_READER_VERSION
 from review_audit import comparison
 
 
@@ -22,6 +22,7 @@ def benchmark(master, source, config, reviewed):
         if len(pdf) != 2:
             raise ValueError('The master must have two pages.')
         masters = [raster(page) for page in pdf]
+        high_masters = [raster(page, 3.4) for page in pdf]
     totals = dict(questions=0, matched=0, unresolved=0, different=0, strong=0,
                   strong_different=0, suggestions=0, suggestion_matches=0)
     results = []
@@ -37,7 +38,7 @@ def benchmark(master, source, config, reviewed):
             for page in range(2):
                 image, quality = align(raster(pdf[idx * 2 + page]), masters[page])
                 if image is not None:
-                    for q, value in detect_page(image, masters[page], conf['mapping'], page).items():
+                    for q, value in detect_page_with_retry(pdf[idx * 2 + page], image, masters[page], conf['mapping'], page, high_masters[page]).items():
                         detected[q] = value
             # Reference decisions are read only after inference finishes.
             data = json.loads(row['data']) if isinstance(row['data'], str) else row['data']
