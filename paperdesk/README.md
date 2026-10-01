@@ -92,3 +92,29 @@ PaperDesk creates an isolated `paperdesk` schema. Accounts, sessions, exams, res
 The connection must support session advisory locks; do not use a transaction pooler on port 6543. Keep one application worker. Render Free can still sleep, but PostgreSQL records survive replacement of the Render container. Missing or failed database connections never fall back to an empty account database. Previously erased SQLite data cannot be recovered by this change; restore from a backup if available.
 
 For a disposable isolated PostgreSQL test schema, set `PAPERDESK_DB_SCHEMA=paperdesk_test_<hex>` and run `test_persistence.py` and `test_app.py` separately with fresh schemas. Tests use only synthetic documents.
+
+## Bulk intake (processing-team workflow)
+
+The Upload papers form accepts one combined PDF per exam, up to 6,000 pages and
+150 MB per upload. It checks the page-count bounds and requires confirmation of
+one class/template and two consecutive pages per student. It does not reliably
+detect mixed classes, missing middle pages or substituted students automatically.
+
+Large uploads are divided into 30-page parts and committed as one import. The
+worker processes them sequentially and skips already-saved papers after a
+restart. Re-uploading the identical bytes to the same exam returns the existing
+queue; it does not create duplicates. A failed intake rolls back all its parts.
+Original source-page ranges are included in each part's name.
+
+On PostgreSQL, intake checks the configured document budget, saved bytes and
+pending work before accepting the import. It reserves an estimate of 3 MiB per
+student for generated evidence in addition to the source PDF. Actual writes still
+obey the hard budget. The default 180 MiB budget cannot hold the supplied 596 MiB
+archive, even without generated evidence. Do not increase the configured budget
+beyond actual available storage. Local installations use their own disk; they
+are separate workspaces unless explicitly connected to the hosted database.
+
+Bulk intake does not automatically approve answers or identities. Processing-team
+staff resolve exceptions, verify page pairing, and release reviewed results.
+Client-approved pilot records are preserved. Capacity and queue tests are separate
+from the scan-accuracy benchmark in VALIDATION.md.

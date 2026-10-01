@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 import cv2
 import pymupdf as fitz
+from starlette.concurrency import run_in_threadpool
 from processor import raster,align,detail_pixels,detect_question,detect_page,detect_page_with_retry,score,validate_config,FIELDS,ocr_available,crop,ink_contrast,reread_data,MARK_READER_VERSION
 from student_details import extract_details,empty_reading,normalise_reviews,details_ready,evidence_rect
 from setup_ocr import MODEL
@@ -70,7 +71,7 @@ def session(request:Request):
         row=c.execute('SELECT (SELECT count(*) FROM users) AS user_count,u.id,u.name,u.email FROM (SELECT 1) seed LEFT JOIN sessions s ON s.token=? AND s.expires>? LEFT JOIN users u ON u.id=s.user_id',(token,time.time())).fetchone()
     setup=row['user_count']==0
     u={k:row[k] for k in ('id','name','email')} if row['id'] is not None else None
-    return {'setup_required':setup,'user':u,'persistent_storage':REMOTE,'ocr_available':ocr_available(),'student_ocr_enhanced':MODEL.exists()}
+    return {'setup_required':setup,'user':u,'persistent_storage':REMOTE,'ocr_available':ocr_available(),'student_ocr_enhanced':MODEL.exists(),'mark_reader_version':MARK_READER_VERSION,'bulk_upload_max_pages':6000}
 
 @app.post('/api/setup')
 async def setup(request:Request):
@@ -196,6 +197,23 @@ def batch(id:str,request:Request,summary:bool=False):
         if summary:p['data']={k:p['data'][k] for k in ('fields','score')}
         b['papers'].append(p)
     return b
+
+@app.post('/api/bulk-imports')
+async def bulk_import(request:Request,exam_id:str=Form(...),file:UploadFile=File(...),pairing_confirmed:bool=Form(False)):
+    user(request);e=require_row('exams',exam_id)
+    if not e['locked']:raise HTTPException(400,'Verify and lock the exam first.')
+    if not pairing_confirmed:raise HTTPException(400,'Confirm that this PDF contains one exam with two consecutive pages per student.')
+    import tempfile
+    from bulk import enqueue,split_ranges
+    with tempfile.TemporaryDirectory(prefix='paperdesk-intake-') as directory:
+        source=Path(directory)/'source.pdf'
+        pages=await save_upload(file,source)
+        try:
+            split_ranges(pages)
+            result=await run_in_threadpool(enqueue,source,exam_id,file.filename or 'Bulk import.pdf')
+        except ValueError as error:raise HTTPException(400,str(error))
+    wake.set()
+    return result
 
 @app.get('/api/batches/{id}/review-audit')
 def review_audit(id:str,request:Request):

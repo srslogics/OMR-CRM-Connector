@@ -139,3 +139,27 @@ text/checkbox conflict, reviewed-value preservation, approval protection,
 SQLite-compatible audit rows and per-student correction counts. The 15-student
 limit and approval requirements remain unchanged. Approved pilot records were
 not rewritten.
+
+## Bulk intake and interruption recovery — 2026-10-02
+
+Implemented atomic intake into parts of 15 students, duplicate-PDF protection,
+page-count bounds, explicit pairing confirmation, queued-work storage estimates
+and cleanup of files from failed transactions. Existing approvals are untouched.
+The old small-batch API remains supported; the upload UI uses the new bulk API.
+
+Passed five intake tests and one authenticated API/recovery test, alongside the
+20 existing Python tests and four JavaScript regression suites. An isolated
+PostgreSQL schema verified file persistence, split records and duplicate reuse.
+A generated 5,220-page file was split into 174 parts for 2,610 students; every
+page number was checked in order. Split plus order verification took 0.96 seconds
+locally. These are simple generated pages, NOT scanned-paper OCR throughput.
+The recovery test stopped processing after one saved synthetic student, resumed,
+and confirmed that the completed record was byte-for-byte unchanged.
+
+A trial of question-local affine registration found two additional strong reads
+but also a differing weak read. It was not shipped: the small calibration set
+does not justify additional complexity or treating weak alternatives as facts.
+Answer/identity accuracy remains as documented for v5. Bulk queue readiness is
+not a claim of unattended grading or identity accuracy. The processing team must
+handle uncertain readings. The full private archive was not uploaded or processed
+as part of these tests.

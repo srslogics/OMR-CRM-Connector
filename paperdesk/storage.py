@@ -129,6 +129,8 @@ CREATE TABLE IF NOT EXISTS exams(id TEXT PRIMARY KEY,name TEXT,class_name TEXT,c
 CREATE TABLE IF NOT EXISTS batches(id TEXT PRIMARY KEY,exam_id TEXT,name TEXT,pages INTEGER,total INTEGER,done INTEGER DEFAULT 0,status TEXT,error TEXT,created REAL);
 CREATE TABLE IF NOT EXISTS papers(id TEXT PRIMARY KEY,batch_id TEXT,idx INTEGER,data TEXT,status TEXT,version INTEGER DEFAULT 1,UNIQUE(batch_id,idx));
 CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY,paper_id TEXT,user_id INTEGER,at REAL,before_data TEXT,after_data TEXT);
+CREATE TABLE IF NOT EXISTS bulk_imports(id TEXT PRIMARY KEY,exam_id TEXT,digest TEXT,pages INTEGER,created REAL,UNIQUE(exam_id,digest));
+CREATE TABLE IF NOT EXISTS bulk_parts(import_id TEXT,batch_id TEXT UNIQUE,start_page INTEGER,PRIMARY KEY(import_id,start_page));
 '''
 
 def initialize():
