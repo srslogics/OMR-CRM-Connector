@@ -62,3 +62,45 @@ Private pilot benchmark: 118/250 answer regions met the strong rule. Of 75 refer
 Review defaults to answer exceptions; all choices remain inspectable. Individual confirmations are saved and protected during rereading. Editing an answer invalidates its check. A next-exception action saves the draft and navigates across papers without approving results or changing the separate student-detail checks. Approved papers remain unchanged.
 
 Passed 12 local unit/integration tests, plus UI tests for exception filtering, stale confirmations, zero/partial score display, polling and exam setup. Synthetic tests include faint marks, shadows, translations, competing marks, missing competing boxes, persistence of confirmations and approved-result protection.
+
+## Client-reviewed comparison — 2026-10-02
+
+All ten pilot papers are approved by the client. Their stored decisions are now
+used as calibration references, without changing any approved record. A fresh
+v3 rerun on the original master/source matched 145/250 decisions, abstained on
+104 and differed on one (student 3, Q21). This fresh rerun differs from older
+published counts; use the reproducible benchmark and its exact inputs.
+
+Reader v4 checks adjacent option text and faint checkbox outlines. Weak checkbox
+reads with competing option ink become unresolved. Recovered faint boxes remain
+reviewable. Text-side choices are **suggestions only**: they remain `?` and cannot
+enter final results until a person selects and approves them. Strong checkbox
+reads retain their existing separate interior-evidence requirements.
+
+The same calibration set now has 151 matches, 99 unresolved and zero differing
+selected answers. 108 readings have strong checkbox evidence; all match this
+reference set. Fifteen additional text-side suggestions include 13 matches and
+two disagreements, demonstrating why suggestions must not be auto-scored. This
+is NOT 100% accuracy: unresolved answers are 39.6% of all answers, and this is a
+development set rather than an independent holdout.
+
+Saved student OCR suggestions match 45 of 75 client-confirmed readable fields
+(after case/whitespace normalization). Five fields are confirmed blank or
+unreadable and excluded from that denominator. OCR has not been retrained or
+validated for automatic identity release. The audit screen reports these field
+misses explicitly. Original machine history missing from a record is reported as
+unavailable, never assumed correct.
+
+`benchmark.py --master ... --source ... --config ... --reviewed ... --output ...`
+re-runs detection before comparing reference answers, writes an aggregate and
+question-level report, and never modifies production records. Keep reviewed
+JSON and reports outside Git. No private scans or student identities are shipped
+in fixtures. `Review accuracy` in each batch compares saved machine readings to
+approved decisions; it does not silently reprocess approved papers.
+
+Bulk release remains blocked by insufficient validation, not by a promise of
+perfection. Keep the existing 15-student batch limit. Independently review new
+papers from each class and scan source, measure strong-read errors and unresolved
+rates separately, and load-test persistent resumable processing before raising
+limits. The original two-page pairing assumption must be validated for each
+source; missing/reordered pages cannot be inferred from this ten-student sample.

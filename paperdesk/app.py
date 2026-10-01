@@ -197,6 +197,14 @@ def batch(id:str,request:Request,summary:bool=False):
         b['papers'].append(p)
     return b
 
+@app.get('/api/batches/{id}/review-audit')
+def review_audit(id:str,request:Request):
+    user(request);require_row('batches',id)
+    from review_audit import comparison
+    with read_db() as c:
+        rows=c.execute('SELECT status,data FROM papers WHERE batch_id=? ORDER BY idx',(id,)).fetchall()
+    return comparison(rows)
+
 @app.post('/api/batches/{id}/retry')
 def retry(id:str,request:Request):
     user(request);b=require_row('batches',id)

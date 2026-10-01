@@ -50,6 +50,22 @@ class MarkReading(unittest.TestCase):
   master,regions=self.fixture();scan=master.copy();self.tick(scan,2,color=(90,90,90))
   x,y,w,h=regions[0];scan[int(y*350):int((y+h)*350),int(x*1100):int((x+w)*1100)]=255
   self.assertNotEqual(detect_question(scan,master,regions)['confidence'],'strong')
+ def test_option_text_suggestion_is_not_scored(self):
+  from unittest.mock import patch
+  import processor
+  master,regions=self.fixture()
+  weak={'answer':'?','confidence':'review','reason':'No checkbox mark','evidence':[]}
+  values=[{'v':[30,25,20] if i==1 else [0,0,0],'cost':.1,'shift':[0,0],'left':450,'limit':7} for i in range(4)]
+  with patch.object(processor,'detect_checkbox_question',return_value=weak),patch.object(processor,'option_evidence',side_effect=values):
+   d=detect_question(master,master,regions)
+  self.assertEqual(d['answer'],'?');self.assertEqual(d['suggested_answer'],'B')
+ def test_weak_checkbox_with_competing_option_ink_abstains(self):
+  from unittest.mock import patch
+  import processor
+  master,regions=self.fixture()
+  values=[{'v':[30,25,20] if i in (1,2) else [0,0,0],'cost':.1,'shift':[0,0],'left':450,'limit':7} for i in range(4)]
+  with patch.object(processor,'detect_checkbox_question',return_value={'answer':'B','confidence':'review','reason':'Weak mark'}),patch.object(processor,'option_evidence',side_effect=values):
+   self.assertEqual(detect_question(master,master,regions)['answer'],'?')
  def test_valid_zero_is_still_allowed_after_review(self):
   self.assertEqual(score(['B']*25,['A']*25)['total'],0)
   self.assertEqual(score(['-']*25,['A']*25)['total'],0)

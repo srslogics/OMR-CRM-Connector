@@ -73,6 +73,9 @@ class Integration(unittest.TestCase):
    self.assertEqual(client.put('/api/papers/'+first['id'],json=review).status_code,200)
    self.assertEqual(client.put('/api/papers/'+first['id'],json=review).status_code,409)
    self.assertEqual(client.get(f'/api/batches/{bid}/export/xlsx').status_code,200)
+   audit=client.get(f'/api/batches/{bid}/review-audit').json()
+   self.assertEqual(audit['approved_students'],1)
+   self.assertEqual(audit['answers']['total'],25)
    csv=client.get(f'/api/batches/{bid}/export/csv').text
    self.assertIn('First Test',csv);self.assertNotIn('Second Test',csv)
    self.assertTrue(client.get('/api/papers/'+first['id']+'/marksheet').content.startswith(b'%PDF'))

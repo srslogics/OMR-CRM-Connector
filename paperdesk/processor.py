@@ -45,7 +45,7 @@ def crop(im,r):
     h,w=im.shape[:2];x,y,rw,rh=r
     return im[max(0,int(y*h)):min(h,int((y+rh)*h)),max(0,int(x*w)):min(w,int((x+rw)*w))]
 
-MARK_READER_VERSION = 3
+MARK_READER_VERSION = 4
 
 def ink_contrast(image):
     """Remove slow lighting/shadow changes without inventing missing strokes."""
@@ -150,7 +150,7 @@ def checkbox_evidence(a,b,rect):
   vals.append(int(max(st[1:,cv2.CC_STAT_AREA],default=0)))
  return {'pixels_by_threshold':vals,'registration_cost':round(float(costs[loc[1],loc[0]]),3),'shift':[dx,dy],'search_limit':margin}
 
-def detect_question(image,template,regions,prepared=None):
+def detect_checkbox_question(image,template,regions,prepared=None):
     prepared=prepared if prepared is not None else (ink_contrast(image),ink_contrast(template))
     legacy=detect_question_legacy(image,template,regions,prepared)
     if image.shape[:2]!=template.shape[:2] or len(regions)!=4:return {**legacy,'confidence':'review'}
@@ -168,6 +168,84 @@ def detect_question(image,template,regions,prepared=None):
                 'checkbox_evidence':evidence}
     return {**legacy,'confidence':'review','checkbox_evidence':evidence,
             'reason':('Readers disagree; check the scan.' if clear else legacy['reason'])}
+
+def option_evidence(scan, master, rect):
+    """Inspect adjacent printed option text as well as the mapped checkbox.
+
+    Follow short gaps in master ink, never scan handwriting, to infer the text
+    extent. Registration and all thresholds are independent of reviewed labels.
+    """
+    height, width = scan.shape
+    x, y, rw, rh = rect
+    x, y, right, bottom = int(x*width), int(y*height), int((x+rw)*width), int((y+rh)*height)
+    scale = width / 1100
+    start = max(0, x-round(180*scale))
+    columns = np.where(np.any(master[y:bottom, start:x] > 40, axis=0))[0] + start
+    left = x
+    for column in columns[::-1]:
+        if left-column > 25*scale:
+            break
+        left = int(column)
+    left = max(0, left-round(10*scale))
+    margin = max(3, round(7*scale))
+    if min(left, y) < margin or right+margin > width or bottom+margin > height:
+        return None
+    reference = master[y:bottom, left:right]
+    source = scan[y-margin:bottom+margin, left-margin:right+margin]
+    ink = (reference > 40).astype('float32')
+    if ink.sum() < 15:
+        return None
+    distance = cv2.distanceTransform((source < 22).astype('uint8'), cv2.DIST_L2, 3)
+    costs = cv2.matchTemplate(np.minimum(distance, 3), ink, cv2.TM_CCORR) / ink.sum()
+    iy, ix = np.mgrid[-margin:margin+1, -margin:margin+1]
+    costs += .003*(ix*ix+iy*iy)
+    _, _, location, _ = cv2.minMaxLoc(costs)
+    dx, dy = location
+    cut = source[dy:dy+reference.shape[0], dx:dx+reference.shape[1]]
+    kernel = np.ones((max(1, round(scale))*2+1,)*2, np.uint8)
+    printed = cv2.dilate((reference > 25).astype('uint8'), kernel) > 0
+    values = []
+    for threshold in (22, 30, 40):
+        added = ((cut > threshold) & ~printed).astype('uint8')
+        _, _, components, _ = cv2.connectedComponentsWithStats(added, 8)
+        values.append(int(max(components[1:, cv2.CC_STAT_AREA], default=0)))
+    return {'v': values, 'cost': float(costs[dy, dx]), 'shift': [dx-margin, dy-margin],
+            'left': left, 'limit': margin}
+
+
+def detect_question(image, template, regions, prepared=None):
+    """Keep option-text marks as suggestions until checked, never as final marks."""
+    prepared = prepared if prepared is not None else (ink_contrast(image), ink_contrast(template))
+    result = detect_checkbox_question(image, template, regions, prepared)
+    if image.shape[:2] != template.shape[:2] or len(regions) != 4:
+        return result
+    evidence = [option_evidence(*prepared, rect) for rect in regions]
+    result['option_evidence'] = evidence
+    unit = max(.6, (image.shape[1] / 1100) ** 2)
+    valid = all(v and v['cost'] < .6 and max(map(abs, v['shift'])) < v['limit'] for v in evidence)
+    if not valid:
+        return result
+    competing = [v for v in evidence if v['v'][1] >= 7 * unit and v['v'][2] >= 4 * unit]
+    if len(competing) > 1 and result.get('confidence') != 'strong':
+        return {**result, 'answer': '?', 'confidence': 'review',
+                'reason': 'Ink at multiple option positions; check for a crossed-out choice or tick tail.'}
+    selected = [i for i, v in enumerate(evidence) if v['v'][1] >= 15 * unit and v['v'][2] >= 7.5 * unit]
+    if len(selected) != 1 or any(v['v'][0] >= 5 * unit for i, v in enumerate(evidence) if i not in selected):
+        return result
+    choice = 'ABCD'[selected[0]]
+    if result['answer'] not in ('?', choice):
+        return {**result, 'answer': '?', 'confidence': 'review',
+                'reason': 'Checkbox and surrounding option marks disagree; check for a correction.'}
+    # A wider region can include a crossed-out option label or a tick tail.
+    # Recover a checkbox only when this region contains no adjacent option text.
+    box_only = (regions[selected[0]][0] * image.shape[1] - evidence[selected[0]]['left']) <= 15 * image.shape[1] / 1100
+    if result['answer'] == '?' and box_only:
+        return {**result, 'answer': choice, 'confidence': 'review',
+                'reason': 'Mark recovered around a faint checkbox; verify the scan.'}
+    if result['answer'] == '?':
+        return {**result, 'suggested_answer': choice, 'confidence': 'review',
+                'reason': 'Possible mark beside the option text. Check for crossed-out choices before accepting.'}
+    return result
 
 def detect_page(image,template,mapping,page):
     prepared=(ink_contrast(image),ink_contrast(template))
