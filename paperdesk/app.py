@@ -304,7 +304,13 @@ def reread_marks(id:str,request:Request):
 
 @app.get('/api/papers/{id}')
 def paper(id:str,request:Request):
-    user(request);p=paper_payload(require_row('papers',id));b=require_row('batches',p['batch_id']);e=require_row('exams',b['exam_id']);p['exam']=dict(e,config=json.loads(e['config']));return p
+    user(request);p=paper_payload(require_row('papers',id));b=require_row('batches',p['batch_id']);e=require_row('exams',b['exam_id']);p['exam']=dict(e,config=json.loads(e['config']))
+    with read_db() as c:
+        part=c.execute('SELECT start_page FROM bulk_parts WHERE batch_id=?',(p['batch_id'],)).fetchone()
+    offset=part['start_page'] if part else 0
+    p['source_student']=offset//2+p['idx']+1
+    p['source_pages']=[offset+p['idx']*2+1,offset+p['idx']*2+2]
+    return p
 
 def paper_payload(p):
     p['data']=json.loads(p['data']);p['details_ready']=details_ready(p['data'])
