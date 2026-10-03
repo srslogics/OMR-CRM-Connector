@@ -45,7 +45,7 @@ def crop(im,r):
     h,w=im.shape[:2];x,y,rw,rh=r
     return im[max(0,int(y*h)):min(h,int((y+rh)*h)),max(0,int(x*w)):min(w,int((x+rw)*w))]
 
-MARK_READER_VERSION = 6
+MARK_READER_VERSION = 7
 
 def ink_contrast(image):
     """Remove slow lighting/shadow changes without inventing missing strokes."""
@@ -291,7 +291,26 @@ def detect_page_with_retry(source_page, image, template, mapping, page, high_tem
     combined = combine_resolution_reads(first, second)
     from whole_option import supplement, blue_contrast
     planes = (blue_contrast(image), blue_contrast(template))
-    return {q: supplement(d, image, template, mapping[str(q+1)]['boxes'], planes) for q,d in combined.items()}
+    combined = {q: supplement(d, image, template, mapping[str(q+1)]['boxes'], planes) for q,d in combined.items()}
+    from page_refinement import refine, merge_reads
+    local, registration = refine(image, template, ink_contrast)
+    if local is None:
+        return combined
+    local_reads = detect_page(local, template, mapping, page)
+    high_local, _ = refine(high, high_template, ink_contrast)
+    if high_local is not None:
+        local_reads = combine_resolution_reads(local_reads, detect_page(high_local, high_template, mapping, page))
+    merged = merge_reads(combined, local_reads)
+    from stroke_reader import stroke_evidence, recover
+    stroke_pages = ((image,template),(local,template),(high,high_template))
+    contrasts = [(ink_contrast(pixels),ink_contrast(ref)) for pixels,ref in stroke_pages]
+    for q,d in merged.items():
+        boxes = mapping[str(q+1)]['boxes']
+        readings = [stroke_evidence(pixels, ref, boxes, ink_contrast, prepared=prepared)
+                    for (pixels,ref),prepared in zip(stroke_pages,contrasts)]
+        merged[q] = recover(d, readings)
+        merged[q]['local_registration'] = registration
+    return merged
 
 def reread_data(old,detected,key,protected=()):
     """Keep saved human choices and student details when refreshing suggestions."""

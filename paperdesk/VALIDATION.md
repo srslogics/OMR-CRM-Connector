@@ -232,3 +232,54 @@ has not been verified or updated by these local steps.
 
 An additional full-width grayscale promotion experiment produced two wrong
 choices in the reviewed calibration set and was rejected. It is not shipped.
+
+## Reader v7: local deformation and checkmark-stroke geometry — 2026-10-03
+
+Implemented a smooth residual displacement field after global registration, with
+limits on movement and a minimum printed-structure requirement. The original
+scan remains the evidence of record. A second reading uses corrected geometry
+at both resolutions; disagreements abstain. A separate stroke reader follows a
+long tick's low turning point rather than assigning its rising tail to the row
+above. Recovery requires agreement between the original, locally corrected and
+higher-resolution images. Competing long ticks and short crossed-out marks at
+different options veto even a previously strong checkbox reading.
+
+The 10 client-reviewed development papers improved from v6's 164/250 matching
+answers to 180/250, with 70 unresolved and zero mismatches. The count of primary
+strong answers remains 108; newly recovered answers are still reviewable. This
+is development/calibration evidence, not an independent error-rate estimate.
+
+On the next nine Class 10 papers, unresolved answers fell from 78/225 in v6 to
+70/225. This net count includes two additional correction conflicts now properly
+left unresolved. Labels for students 12, 15 and 18 were added by assistant visual
+inspection; one discovered conflict informed the fix, so this set is development
+evidence. Among its 63 clear references, 49 matched and 14 remained unresolved.
+All 12 excluded/ambiguous references remain unresolved in the final version.
+
+After freezing the implementation, students 13 and 17 were visually transcribed
+without consulting their individual predictions or the official key. Of 48 clear
+references, v6 matched 28 and left 20 unresolved; v7 matched 30 and left 18
+unresolved, with zero mismatches. Two ambiguous references were excluded.
+These are assistant-generated references, not client-approved ground truth, and
+two papers are insufficient to establish unattended grading accuracy. The
+implementation hashes and per-answer evidence remain in private local reports.
+
+Handwriting replacement was evaluated separately, not assumed better. The pinned
+Microsoft TrOCR-small-handwritten model (revision
+b4648cfa171985a6745f37ddd637e98c0da958ac) was downloaded and run locally on 230
+field variants. Only two verified fields matched in its best tested variant;
+trimming the unused cells did not improve it. A local Apple Vision experiment
+returned runtime errors for every field and provides no accuracy evidence.
+Alternative grid/trim preprocessing also regressed against the existing field
+reader. None of these experiments replaces the deployed student-detail reader.
+No student images were sent to an external OCR service. Private model weights,
+student images and field-level results are excluded from the repository.
+
+Passed the existing 29 mark/API/audit/operations/concurrency checks and seven
+new geometry/conflict checks, plus the separate bulk API recovery test. New
+cases cover blank/mismatched pages, smooth distortion, tick-tail anchoring,
+multiple marks, short crossed-out choices, contradictory readings and preserving
+review status. Full bulk readiness and automatic identity verification remain
+unmet; this is a measured reader improvement, not a claim that review has been
+eliminated. Browser startup was blocked by session permissions (localhost bind
+returned operation not permitted); no deployment verification is claimed.

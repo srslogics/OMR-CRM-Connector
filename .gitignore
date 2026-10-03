@@ -49,3 +49,6 @@ next-env.d.ts
 
 # Downloaded, checksum-verified PaperDesk OCR weights.
 /paperdesk/models/
+
+# ONNX Runtime telemetry artifact in restricted test environments.
+:memory:.ses
