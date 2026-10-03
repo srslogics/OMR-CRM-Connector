@@ -163,3 +163,33 @@ Answer/identity accuracy remains as documented for v5. Bulk queue readiness is
 not a claim of unattended grading or identity accuracy. The processing team must
 handle uncertain readings. The full private archive was not uploaded or processed
 as part of these tests.
+
+## Internal processing desk — 2026-10-03
+
+Added an authenticated, paginated team queue across batches; it lists answer
+exceptions, unresolved identity fields, page pairing, failed jobs and estimated
+storage headroom. Bulk-part source page offsets remain visible. Drafts can be
+saved back to the queue without releasing results. This uses the existing
+administrator access model; it does not introduce a separate client/staff role.
+Strong scan evidence is labelled as unflagged, not as a human confirmation.
+
+Expanded answer evidence images to include option text to the left of checkboxes.
+The previous box-only view could hide off-box ticks. The full page remains the
+source of truth; the context crop is based on the existing two-column layout.
+
+Processed the next nine Class 10 students (original pages 21–38 of the pilot's
+source file), outside the ten-paper calibration set. All 18 pages registered;
+printed Class 10 banners were visually checked. There were 83 unresolved answers
+out of 225. These are not client-labelled reference papers: no accuracy claim,
+final scores or approvals follow from this run. Local marks plus field extraction
+took 13.18 seconds; this excludes service/database costs.
+
+Passed 24 unit/integration checks, the authenticated bulk/restart/operations test,
+five bulk intake checks and four JavaScript regression suites. Browser QA with
+synthetic papers verified queue navigation, expanded scan context and save-and-
+return without approval. Production-approved papers were not changed.
+
+The source archive is about 596 MiB. The default hosted document budget remains
+180 MiB; it cannot hold the archive. The queue's capacity panel makes this
+constraint visible. Do not label the complete archive ready for hosted intake
+without providing sufficient durable private storage.

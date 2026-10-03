@@ -2,7 +2,7 @@ from pathlib import Path
 import os, json, sqlite3, uuid, secrets, hashlib, hmac, time, threading, io, csv
 from contextlib import asynccontextmanager, contextmanager
 from urllib.parse import urlparse
-from fastapi import FastAPI, Request, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, Request, HTTPException, UploadFile, File, Form, Query
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 import cv2
@@ -109,6 +109,27 @@ def dashboard(request:Request):
             counts[row['batch_id']]=counts.get(row['batch_id'],0)+int(details_ready(json.loads(row['data'])))
         for batch in batches:batch['approved']=counts.get(batch['id'],0)
     return {'exams':exams,'batches':batches}
+
+@app.get('/api/operations')
+def operations(request:Request,offset:int=Query(0,ge=0),limit:int=Query(25,ge=1,le=50)):
+    user(request)
+    from operations import pending_items
+    from storage import FILE_BUDGET
+    from bulk import EVIDENCE_BYTES_PER_STUDENT
+    with read_db() as c:
+        states={r['status']:r['n'] for r in c.execute('SELECT status,count(*) n FROM papers GROUP BY status')}
+        jobs=[dict(r) for r in c.execute("SELECT id,name,status,total,done,error FROM batches WHERE status IN ('queued','processing','failed') ORDER BY created,id")]
+        used=c.execute('SELECT COALESCE(SUM(size),0) FROM files').fetchone()[0] if REMOTE else None
+        rows=c.execute("SELECT p.*,b.name batch_name,e.name exam_name,bp.start_page FROM papers p JOIN batches b ON b.id=p.batch_id JOIN exams e ON e.id=b.exam_id LEFT JOIN bulk_parts bp ON bp.batch_id=b.id WHERE p.status!='approved' ORDER BY b.created,b.id,p.idx LIMIT ? OFFSET ?",(limit+1,offset)).fetchall()
+    pending=sum(max(0,j['total']-j['done']) for j in jobs)
+    reservation=pending*EVIDENCE_BYTES_PER_STUDENT
+    return {'items':[pending_items(dict(r)) for r in rows[:limit]],
+            'next_offset':offset+limit if len(rows)>limit else None,'offset':offset,
+            'counts':{'awaiting_team':sum(v for k,v in states.items() if k!='approved'),
+                      'approved':states.get('approved',0),'waiting_to_process':pending},
+            'jobs':jobs,'capacity':{'remote':REMOTE,'used_bytes':used,
+                'budget_bytes':FILE_BUDGET if REMOTE else None,'reserved_bytes':reservation,
+                'available_bytes':max(0,FILE_BUDGET-used-reservation) if REMOTE else None}}
 
 @app.post('/api/exams')
 async def create_exam(request:Request):
@@ -302,6 +323,18 @@ def answer_evidence(id:str,question:int,request:Request):
     im=cv2.imread(str(materialize(DATA/'batches'/b['id']/f"{p['idx']}-{m['page']}.png")))
     if im is None:raise HTTPException(404,'Scan not available')
     parts=[];h,w=im.shape[:2]
+    # Include the whole option column: students often tick the option label,
+    # far to the left of its checkbox. Box-only crops hid that evidence.
+    boxes=m['boxes'];left=min(r[0] for r in boxes)
+    context_left=int((.48 if left>=.5 else .04)*w)
+    context_right=min(w,int(max(r[0]+r[2] for r in boxes)*w)+round(w*.025))
+    context_top=max(0,int(min(r[1] for r in boxes)*h)-round(h*.035))
+    context_bottom=min(h,int(max(r[1]+r[3] for r in boxes)*h)+round(h*.01))
+    context=im[context_top:context_bottom,context_left:context_right]
+    if context.size:
+        context=cv2.copyMakeBorder(context,30,10,8,8,cv2.BORDER_CONSTANT,value=(255,255,255))
+        cv2.putText(context,'Option text and checkboxes - original scan',(8,20),cv2.FONT_HERSHEY_SIMPLEX,.5,(35,35,35),1)
+        parts.append(context)
     for option,r in zip('ABCD',m['boxes']):
         x,y,rw,rh=r;pad=12
         cut=im[max(0,int(y*h)-pad):min(h,int((y+rh)*h)+pad),max(0,int(x*w)-pad):min(w,int((x+rw)*w)+pad)]

@@ -118,3 +118,15 @@ Bulk intake does not automatically approve answers or identities. Processing-tea
 staff resolve exceptions, verify page pairing, and release reviewed results.
 Client-approved pilot records are preserved. Capacity and queue tests are separate
 from the scan-accuracy benchmark in VALIDATION.md.
+
+### Processing desk
+
+Use **Processing desk** for the processing team's workload across all batches.
+Open an item, inspect the scan, correct the flagged fields/answers and save the
+draft back to the queue. Final approval still checks the saved values and page
+pairing. Client results exports contain approved records only. This view shares
+the existing administrator login; it is not a separate permission boundary.
+
+The desk also shows failed/queued jobs and hosted document capacity, including
+estimated space reserved for unfinished papers. Resolve capacity before intake;
+do not raise the application allowance past the provider's actual quota.

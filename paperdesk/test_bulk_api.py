@@ -17,6 +17,7 @@ class BulkAPI(unittest.TestCase):
     def test_authenticated_intake_and_resume_preserve_completed_record(self):
         with patch.object(service,'work_loop'), TestClient(service.app) as client:
             self.assertEqual(client.post('/api/bulk-imports',data={'exam_id':'x','pairing_confirmed':'true'},files={'file':('x.pdf',b'bad','application/pdf')}).status_code,401)
+            self.assertEqual(client.get('/api/operations').status_code,401)
             client.post('/api/setup',json={'name':'Internal QA','email':'qa@example.test','password':'synthetic-password'})
             eid=client.post('/api/exams',json={'name':'Bulk QA','class_name':'10'}).json()['id']
             blank=Path(temporary.name)/'blank.pdf';config=create_pdf(blank)
@@ -46,6 +47,17 @@ class BulkAPI(unittest.TestCase):
             self.assertEqual(len(after),3)
             self.assertEqual(before[0],after[0])
             self.assertEqual(service.require_row('batches',bid)['status'],'ready')
+            queue=client.get('/api/operations?limit=2').json()
+            self.assertEqual(queue['counts']['awaiting_team'],3)
+            self.assertEqual(len(queue['items']),2)
+            self.assertEqual(queue['next_offset'],2)
+            next_page=client.get('/api/operations?limit=2&offset=2').json()
+            self.assertEqual(len(next_page['items']),1)
+            self.assertIsNone(next_page['next_offset'])
+            self.assertFalse(queue['capacity']['remote'])
+            self.assertEqual(client.get('/api/operations?limit=1000').status_code,422)
+            self.assertEqual(client.get('/api/operations?offset=-1').status_code,422)
+
             duplicate=client.post('/api/bulk-imports',data={'exam_id':eid,'pairing_confirmed':'true'},files=files).json()
             self.assertTrue(duplicate['duplicate'])
             self.assertEqual(duplicate['batches'][0]['batch_id'],bid)
