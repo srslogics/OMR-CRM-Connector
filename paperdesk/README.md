@@ -180,3 +180,9 @@ See `VALIDATION.md` for the measured scan results and remaining limitations.
 The student handwriting engine is unchanged: tested replacements did not improve
 these scans. The new mark reader does not automatically approve student identity
 or make the 2,610-student archive ready for unattended release.
+
+Reader v7's latest marks-only test peaked at about 532 MiB for one process,
+excluding full identity OCR and hosting overhead. A 512 MiB service has
+insufficient headroom for this tested path. Keep the web process separate and
+run the processing worker on a machine with adequate memory; do not raise
+concurrency on the small web instance to compensate for accuracy work.

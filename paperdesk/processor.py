@@ -297,9 +297,9 @@ def detect_page_with_retry(source_page, image, template, mapping, page, high_tem
     if local is None:
         return combined
     local_reads = detect_page(local, template, mapping, page)
-    high_local, _ = refine(high, high_template, ink_contrast)
-    if high_local is not None:
-        local_reads = combine_resolution_reads(local_reads, detect_page(high_local, high_template, mapping, page))
+    # Reuse the independently registered high-resolution reading. Repeating
+    # dense flow on a full high-resolution page exceeds small worker budgets.
+    local_reads = combine_resolution_reads(local_reads, second)
     merged = merge_reads(combined, local_reads)
     from stroke_reader import stroke_evidence, recover
     stroke_pages = ((image,template),(local,template),(high,high_template))

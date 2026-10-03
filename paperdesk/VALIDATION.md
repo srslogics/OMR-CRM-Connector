@@ -238,7 +238,7 @@ choices in the reviewed calibration set and was rejected. It is not shipped.
 Implemented a smooth residual displacement field after global registration, with
 limits on movement and a minimum printed-structure requirement. The original
 scan remains the evidence of record. A second reading uses corrected geometry
-at both resolutions; disagreements abstain. A separate stroke reader follows a
+and the independently registered higher-resolution scan; disagreements abstain. A separate stroke reader follows a
 long tick's low turning point rather than assigning its rising tail to the row
 above. Recovery requires agreement between the original, locally corrected and
 higher-resolution images. Competing long ticks and short crossed-out marks at
@@ -283,3 +283,11 @@ review status. Full bulk readiness and automatic identity verification remain
 unmet; this is a measured reader improvement, not a claim that review has been
 eliminated. Browser startup was blocked by session permissions (localhost bind
 returned operation not permitted); no deployment verification is claimed.
+
+A memory follow-up reused the existing high-resolution reading instead of running
+another dense flow at full high resolution. On the development benchmark the
+answer counts were unchanged at 180 matched / 70 unresolved / 0 different;
+peak resident memory fell from 824,377,344 to 558,333,952 bytes and runtime from
+21.52 to 12.69 seconds. This is marks-only measurement, not full OCR/hosted load.
+It still exceeds a 512 MiB process allowance; do not represent this reader as
+validated on that instance. Resource requirements remain a deployment constraint.
