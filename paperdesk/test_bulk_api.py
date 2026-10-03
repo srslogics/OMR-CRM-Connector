@@ -30,12 +30,13 @@ class BulkAPI(unittest.TestCase):
             r=client.post('/api/bulk-imports',data={'exam_id':eid,'pairing_confirmed':'true'},files=files)
             self.assertEqual(r.status_code,200,r.text)
             bid=r.json()['batches'][0]['batch_id'];batch=service.require_row('batches',bid)
-            original=service.extract_details
+            import inference
+            original=inference.extract_details
             def interrupt_after_first(*args,**kwargs):
                 readings=original(*args,**kwargs)
                 service.stop.set()
                 return readings
-            with patch.object(service,'extract_details',side_effect=interrupt_after_first):
+            with patch.object(inference,'extract_details',side_effect=interrupt_after_first):
                 service.process_batch(batch)
             with service.read_db() as c:
                 before=[dict(p) for p in c.execute('SELECT * FROM papers WHERE batch_id=?',(bid,)).fetchall()]

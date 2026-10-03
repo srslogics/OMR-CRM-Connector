@@ -45,7 +45,7 @@ def crop(im,r):
     h,w=im.shape[:2];x,y,rw,rh=r
     return im[max(0,int(y*h)):min(h,int((y+rh)*h)),max(0,int(x*w)):min(w,int((x+rw)*w))]
 
-MARK_READER_VERSION = 5
+MARK_READER_VERSION = 6
 
 def ink_contrast(image):
     """Remove slow lighting/shadow changes without inventing missing strokes."""
@@ -288,7 +288,10 @@ def detect_page_with_retry(source_page, image, template, mapping, page, high_tem
         return {q: {**d, 'second_resolution': {'reason': 'Higher-resolution alignment failed.'}}
                 for q, d in first.items()}
     second = detect_page(high, high_template, mapping, page)
-    return combine_resolution_reads(first, second)
+    combined = combine_resolution_reads(first, second)
+    from whole_option import supplement, blue_contrast
+    planes = (blue_contrast(image), blue_contrast(template))
+    return {q: supplement(d, image, template, mapping[str(q+1)]['boxes'], planes) for q,d in combined.items()}
 
 def reread_data(old,detected,key,protected=()):
     """Keep saved human choices and student details when refreshing suggestions."""

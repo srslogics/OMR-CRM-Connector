@@ -22,11 +22,14 @@ async def lifespan(app):
     global worker
     init()
     if REMOTE:connection_pool().wait(timeout=20)
-    stop.clear();worker=threading.Thread(target=work_loop,daemon=True);worker.start()
+    stop.clear();worker=None
+    if os.getenv('PAPERDESK_EMBEDDED_WORKER','1')=='1':
+        worker=threading.Thread(target=work_loop,daemon=True);worker.start()
     try:yield
     finally:
-        stop.set();wake.set();worker.join(timeout=3)
-        if not worker.is_alive():close_pool()
+        stop.set();wake.set()
+        if worker is not None:worker.join(timeout=3)
+        if worker is None or not worker.is_alive():close_pool()
 app=FastAPI(title='PaperDesk',lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 @app.exception_handler(StorageError)
 async def storage_error(request,exc):return JSONResponse({'detail':str(exc)},507)
@@ -458,7 +461,48 @@ def work_loop():
             # A database outage must not terminate the queue or expose credentials.
             stop.wait(5)
 
+def commit_inferred(b, idx, data, folder):
+    with db() as c:
+        # Queue leadership serializes writers; the unique key protects retries.
+        if c.execute('SELECT 1 FROM papers WHERE batch_id=? AND idx=?',(b['id'],idx)).fetchone():return
+        persist_files(c,sorted(folder.glob(f'{idx}-*.png')))
+        c.execute('INSERT INTO papers VALUES(?,?,?,?,?,1)',(uuid.uuid4().hex,b['id'],idx,json.dumps(data),'review'))
+        c.execute('UPDATE batches SET done=(SELECT count(*) FROM papers WHERE batch_id=?) WHERE id=?',(b['id'],b['id']))
+
 def process_batch(b):
+    if stop.is_set():return
+    workers=int(os.getenv('PAPERDESK_PROCESS_WORKERS','1'))
+    if not 1<=workers<=4:raise ValueError('PAPERDESK_PROCESS_WORKERS must be between 1 and 4')
+    if workers==1:return process_batch_sequential(b)
+    from concurrent.futures import ProcessPoolExecutor, wait, FIRST_COMPLETED
+    from multiprocessing import get_context
+    from inference import prepare_worker, infer_index
+    e=require_row('exams',b['exam_id']);conf=json.loads(e['config']);folder=DATA/'batches'/b['id']
+    source=materialize(folder/'source.pdf');master=materialize(DATA/'exams'/e['id']/'template.pdf')
+    pages=[materialize(DATA/'exams'/e['id']/f'page-{i}.png') for i in range(2)]
+    with read_db() as c:completed={r['idx'] for r in c.execute('SELECT idx FROM papers WHERE batch_id=?',(b['id'],))}
+    indices=iter(i for i in range(b['total']) if i not in completed)
+    with db() as c:c.execute("UPDATE batches SET status='processing',error='' WHERE id=?",(b['id'],))
+    with ProcessPoolExecutor(max_workers=workers,mp_context=get_context('spawn'),initializer=prepare_worker,
+                             initargs=(source,master,pages,conf,folder)) as pool:
+        pending=set()
+        def submit_one():
+            idx=next(indices,None)
+            if idx is not None:pending.add(pool.submit(infer_index,idx))
+        for _ in range(workers):submit_one()
+        while pending:
+            done,pending=wait(pending,timeout=.25,return_when=FIRST_COMPLETED)
+            for future in done:
+                idx,data=future.result();commit_inferred(b,idx,data,folder)
+                if not stop.is_set():submit_one()
+            if stop.is_set():
+                # Finish only the bounded in-flight set, persist it, then stop.
+                for future in pending:
+                    idx,data=future.result();commit_inferred(b,idx,data,folder)
+                return
+    with db() as c:c.execute("UPDATE batches SET status='ready' WHERE id=?",(b['id'],))
+
+def process_batch_sequential(b):
     e=require_row('exams',b['exam_id']);conf=json.loads(e['config']);folder=DATA/'batches'/b['id'];masters=[cv2.imread(str(materialize(DATA/'exams'/e['id']/f'page-{i}.png'))) for i in range(2)]
     with db() as c:c.execute("UPDATE batches SET status='processing',error='' WHERE id=?",(b['id'],))
     with fitz.open(materialize(DATA/'exams'/e['id']/'template.pdf')) as master_doc:
@@ -468,22 +512,8 @@ def process_batch(b):
             if stop.is_set():return
             with read_db() as c:exists=c.execute('SELECT 1 FROM papers WHERE batch_id=? AND idx=?',(b['id'],idx)).fetchone()
             if exists:continue
-            readings={k:empty_reading('Page alignment failed or field not mapped. Read the original PDF.') for k in FIELDS};fields={k:'' for k in FIELDS};answers=['?']*25;details=[{'reason':'Page alignment needs review','evidence':[]} for _ in range(25)];flags=[]
-            for pageno in range(2):
-                im=raster(doc[idx*2+pageno]);aligned,quality,transform=align(im,masters[pageno],True)
-                if aligned is None:
-                    flags.append(f'Page {pageno+1}: alignment failed; check page order and scan quality.')
-                    cv2.imwrite(str(folder/f'{idx}-{pageno}.png'),im);continue
-                cv2.imwrite(str(folder/f'{idx}-{pageno}.png'),aligned)
-                for q,d in detect_page_with_retry(doc[idx*2+pageno],aligned,masters[pageno],conf['mapping'],pageno,high_masters[pageno]).items():
-                    answers[q]=d['answer'];details[q]=d
-                if pageno==0:
-                    pixels,reference=detail_pixels(doc[idx*2],im,masters[0],transform)
-                    readings=extract_details(pixels,reference,conf.get('fields',{}),folder,idx)
-                    fields={k:readings[k]['suggested'] for k in FIELDS}
-                    del pixels,reference
-            flags.append('Verify student details, both pages and all detected answers before approving.')
-            data={'mark_reader_version':MARK_READER_VERSION,'detected_answers':list(answers),'answer_overrides':[],'fields':fields,'field_ocr':readings,'field_review':{},'answers':answers,'details':details,'flags':flags,'pairing_verified':False,'score':score(answers,conf['key'])}
+            from inference import infer_student
+            data=infer_student(doc,idx,masters,high_masters,conf,folder)
             with db() as c:
                 persist_files(c,sorted(folder.glob(f'{idx}-*.png')))
                 c.execute('INSERT INTO papers VALUES(?,?,?,?,?,1)',(uuid.uuid4().hex,b['id'],idx,json.dumps(data),'review'))

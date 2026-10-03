@@ -193,3 +193,42 @@ The source archive is about 596 MiB. The default hosted document budget remains
 180 MiB; it cannot hold the archive. The queue's capacity panel makes this
 constraint visible. Do not label the complete archive ready for hosted intake
 without providing sufficient durable private storage.
+
+## Bounded parallel processing and option-row reader — 2026-10-03
+
+The web app can now run without the OCR coordinator. A dedicated worker uses
+1–4 CPU processes with at most that many students in flight and transactional
+per-student checkpoints. Spawned children do not open database connections.
+A real spawned-process synthetic test verified sequential/parallel output parity,
+interruption with exactly two in-flight students, resume, and preservation of an
+existing approved record. Local queue coordinators now share a filesystem lock.
+
+Reader v6 adds a supplementary blue-pen detector across option rows, suppresses
+coloured master print and rejects competing grayscale marks or reader conflicts.
+It does not guess from the official key and does not automatically approve a
+student. On the ten approved calibration papers: 164/250 matched, 86 unresolved,
+0 different; 108 primary strong reads matched. This is five additional resolved
+answers over v5. Calibration results are not independent accuracy estimates.
+
+On nine newer papers: 78/225 answers remain unresolved (v5: 83). In the independent
+assistant-read subset of 49 clear answers, 34 matched, 15 remained unresolved and
+none differed. One additional ambiguous multi-mark answer remained unresolved.
+These are assistant references, not client-approved ground truth. Handwritten
+identity OCR is unchanged. Current exception rates still FAIL unattended bulk
+readiness; no claim of perfect recognition or 2,500-student automatic approval.
+
+For the same nine papers, marks and identity inference took 24.22 seconds with
+one worker and 15.95 seconds with two; answers/fields were identical. Maximum
+single-child resident memory was 456,310,784 bytes on macOS. Timing includes
+worker preparation and local evidence output but excludes hosted database and
+network overhead. Concurrency is a throughput change, not an accuracy measure.
+
+Passed 29 mark/API/audit/operations/colour/concurrency tests and the separate
+bulk API restart test. The local app was restarted with a dedicated two-worker
+processor. Its nine unapproved papers were re-read through the authenticated
+API, preserving edits/approvals via the existing compare-and-swap audit path.
+The updated batch was verified in the browser. The public Render deployment
+has not been verified or updated by these local steps.
+
+An additional full-width grayscale promotion experiment produced two wrong
+choices in the reviewed calibration set and was rejected. It is not shipped.

@@ -213,7 +213,20 @@ def materialize(path):
 def worker_leadership(stop):
     """One active queue reader, including during overlapping Render deploys."""
     if not REMOTE:
-        yield lambda: None
+        import fcntl
+        with (DATA / '.worker.lock').open('a') as handle:
+            acquired = False
+            while not stop.is_set():
+                try:
+                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    acquired = True
+                    break
+                except BlockingIOError:
+                    stop.wait(1)
+            try:
+                yield (lambda: None) if acquired else None
+            finally:
+                if acquired:fcntl.flock(handle, fcntl.LOCK_UN)
         return
     with pg_connect() as c:
         c.autocommit = True

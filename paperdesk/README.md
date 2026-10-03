@@ -101,7 +101,7 @@ one class/template and two consecutive pages per student. It does not reliably
 detect mixed classes, missing middle pages or substituted students automatically.
 
 Large uploads are divided into 30-page parts and committed as one import. The
-worker processes them sequentially and skips already-saved papers after a
+worker uses bounded concurrency (one process by default) and skips already-saved papers after a
 restart. Re-uploading the identical bytes to the same exam returns the existing
 queue; it does not create duplicates. A failed intake rolls back all its parts.
 Original source-page ranges are included in each part's name.
@@ -130,3 +130,40 @@ the existing administrator login; it is not a separate permission boundary.
 The desk also shows failed/queued jobs and hosted document capacity, including
 estimated space reserved for unfinished papers. Resolve capacity before intake;
 do not raise the application allowance past the provider's actual quota.
+
+### Separate web and processing workers
+
+The web process can serve the interface without running OCR. Set
+`PAPERDESK_EMBEDDED_WORKER=0` for it, and start a separate process from this
+`paperdesk` directory:
+
+```sh
+PAPERDESK_PROCESS_WORKERS=2 .venv/bin/python worker.py
+```
+
+Both processes must use the same `DATABASE_URL` and schema, or the same absolute
+`PAPERDESK_DATA` directory on a local installation. A PostgreSQL advisory lock
+(or a local filesystem lock on macOS/Linux) permits only one queue coordinator.
+The coordinator schedules at most one student per configured child process,
+checkpoints each finished student, and resumes without replacing saved records.
+`PAPERDESK_PROCESS_WORKERS` accepts 1–4; the default is 1. Child processes perform
+image/OCR work only; the coordinator owns database writes. Ctrl+C/SIGTERM stops
+new scheduling and drains the bounded work already in flight.
+
+Measured locally on nine real Class 10 papers, two workers took 15.95 seconds
+versus 24.22 seconds for one, with identical extracted answers and fields. This
+is a small local test, not a 2,500-student hosting benchmark. A child process
+reached approximately 435 MiB of resident memory. Use at least 2 GiB available
+memory for two processing workers plus the coordinator and web process, then
+measure actual usage. Do not enable two OCR processes on a 512 MiB instance.
+A separate process must actually be running; disabling the embedded worker alone
+leaves jobs queued. Hosting plan availability and storage quotas are independent
+of these software settings.
+
+Run concurrency and restart checks separately from tests that initialise their
+own temporary database:
+
+```sh
+.venv/bin/python -m unittest test_parallel_worker
+.venv/bin/python -m unittest test_bulk_api
+```
