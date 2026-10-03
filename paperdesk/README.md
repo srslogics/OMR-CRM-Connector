@@ -167,3 +167,22 @@ own temporary database:
 .venv/bin/python -m unittest test_parallel_worker
 .venv/bin/python -m unittest test_bulk_api
 ```
+
+### Reader v7 validation
+
+The reader now retries residual page deformation and long ticks that extend
+outside the answer box. It compares the original and corrected readings and
+retains conflicts for review, including a long tick alongside a crossed-out
+choice. The answer key is used only after recognition for scoring.
+
+`python -m unittest test_refinement` checks geometry and conflict behaviour.
+See `VALIDATION.md` for the measured scan results and remaining limitations.
+The student handwriting engine is unchanged: tested replacements did not improve
+these scans. The new mark reader does not automatically approve student identity
+or make the 2,610-student archive ready for unattended release.
+
+Reader v7's latest marks-only test peaked at about 532 MiB for one process,
+excluding full identity OCR and hosting overhead. A 512 MiB service has
+insufficient headroom for this tested path. Keep the web process separate and
+run the processing worker on a machine with adequate memory; do not raise
+concurrency on the small web instance to compensate for accuracy work.
