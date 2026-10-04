@@ -525,21 +525,28 @@ def process_batch_sequential(b):
                 c.execute('UPDATE batches SET done=(SELECT count(*) FROM papers WHERE batch_id=?) WHERE id=?',(b['id'],b['id']))
     with db() as c:c.execute("UPDATE batches SET status='ready' WHERE id=?",(b['id'],))
 
-@app.get('/api/bulk-imports/{id}/draft/{kind}')
-def bulk_draft_export(id:str,kind:str,request:Request):
-    user(request)
+def bulk_result_rows(id):
+    from student_results import result_row
     with read_db() as c:
         if not c.execute('SELECT id FROM bulk_imports WHERE id=?',(id,)).fetchone():
             raise HTTPException(404,'Bulk import not found')
-        rows=c.execute('SELECT p.*,bp.start_page FROM bulk_parts bp JOIN papers p ON p.batch_id=bp.batch_id WHERE bp.import_id=? ORDER BY bp.start_page,p.idx',(id,)).fetchall()
+        rows=c.execute('SELECT p.data,p.status FROM bulk_parts bp JOIN papers p ON p.batch_id=bp.batch_id WHERE bp.import_id=? ORDER BY bp.start_page,p.idx',(id,)).fetchall()
+    return [result_row(dict(row)) for row in rows]
+
+@app.get('/api/bulk-imports/{id}/results')
+def bulk_results(id:str,request:Request):
+    user(request)
+    from student_results import POLICY
+    return {'students':bulk_result_rows(id),'policy':POLICY}
+
+@app.get('/api/bulk-imports/{id}/draft/{kind}')
+def bulk_draft_export(id:str,kind:str,request:Request):
+    user(request)
+    rows=bulk_result_rows(id)
     if not rows:raise HTTPException(400,'No processed papers yet. Try again after the first paper completes.')
-    headers=['Record status','Student number','Import pages','Paper ID']+FIELDS+['Detected marks /100 (provisional)','Unresolved answers','Answers requiring checks','Student details checked','Page pairing checked']+[f'Q{i}' for i in range(1,26)]
-    values=[]
-    for row in rows:
-        d=json.loads(row['data']);score=d['score'];start=row['start_page']+2*row['idx']+1
-        approved=row['status']=='approved' and details_ready(d)
-        values.append(['APPROVED' if approved else 'PROVISIONAL - NOT VERIFIED',(start+1)//2,f'{start}-{start+1}',row['id']]+[d['fields'].get(k,'') for k in FIELDS]+[score['total'],score['unresolved'],score.get('checks_required',score['unresolved']),'Yes' if details_ready(d) else 'No','Yes' if d.get('pairing_verified') else 'No']+d['answers'])
-    return table_download(headers,values,kind,'provisional-bulk-'+id[:8],'Provisional working data')
+    headers=['Student name','School','Father mobile','Mother mobile','Marks /100','Grace marks included','Student details','Result status']
+    values=[[r[k] for k in ('name','school','father_mobile','mother_mobile','marks','grace','details_status','result_status')] for r in rows]
+    return table_download(headers,values,kind,'student-results','Student results')
 
 @app.get('/api/batches/{id}/export/{kind}')
 def export(id:str,kind:str,request:Request):

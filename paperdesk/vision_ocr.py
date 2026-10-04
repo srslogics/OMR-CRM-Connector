@@ -107,3 +107,21 @@ def merge_reading(reading, text, key):
     elif text != primary:
         out.update(state='conflict',reason='Local OCR and the vision reader disagree. Both readings are retained beside the scan.')
     return out
+
+
+def refine_name_reading(reading, text):
+    """Second literal name reading; keep source alternatives and verification pending."""
+    if text is None:
+        return reading
+    from student_details import normalise
+    text = normalise(text, 'name')
+    out = {**reading, 'candidates': [dict(c) for c in reading.get('candidates', [])]}
+    out['name_grid_vision'] = {'text': text, 'model': MODEL_ID, 'revision': MODEL_REVISION}
+    if not text or not reading.get('suggested'):
+        return out
+    if not any(''.join(c['text'].casefold().split()) == ''.join(text.casefold().split()) for c in out['candidates']):
+        out['candidates'].append({'text': text, 'score': None, 'method': 'Local vision — grid removed'})
+    out['suggested'] = text
+    out['state'] = 'review' if text == reading['suggested'] else 'conflict'
+    out['reason'] = 'Name read with printed grid removed. Original alternatives remain available; identity is not verified.'
+    return out

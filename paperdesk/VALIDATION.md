@@ -300,3 +300,17 @@ Apple Vision runtime experiment: a subsequent working local test still did not
 beat the existing OCR. Local browser/API verification confirmed nine completed
 papers and vision alternatives visible in the review workflow; none approved.
 This is not verification of a Render deployment or unattended bulk readiness.
+
+## Student summary and grace policy — 2026-10-05
+
+Requested once-per-student alignment grace is a reporting adjustment, not a change
+to recognised answers. Tests cover repeated alignment flags, the 100 cap, resolved
+answers, nonalignment uncertainty, absent IDs/questions in downloads, authentication
+and consistent bulk API totals. On the local 500-record run, 454 records qualify.
+
+A grid-removed local vision name pass matched 6/9 separate visual references,
+versus 3/9 for the existing suggestions. On ten calibration names it matched 6/10,
+the same count as the original vision reader. Grid removal did not improve school
+or phone results, and regressed mother-mobile readings from 5/7 to 2/7; these fields
+retain their existing reader. This experiment supports a limited name improvement,
+not close-to-perfect extraction or independently measured accuracy on 500 records.

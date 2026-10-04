@@ -227,3 +227,21 @@ manifest mapping combined pages to the original filename/page numbers. The queue
 splits intake into 34 resumable parts (33 × 15 students and one × 5); no review is
 required between parts. Keep the local processing machine awake and connected to
 its data storage. After interruption, restart the worker with the same data path.
+
+### Student totals and alignment grace
+
+Bulk runs → View student results shows names, schools, both parent mobile numbers
+and marks out of 100. Bulk Excel/CSV uses the same calculation and excludes paper
+IDs and individual answers. Original answers and internal evidence remain stored.
+
+The requested policy adds eight marks **once per student** if at least one still
+unresolved answer has an alignment/registration reason, capped at 100. Ordinary
+blank, faint or conflicting answers alone do not qualify. Grace is calculated
+from the original subtotal at read time, so repeated downloads cannot add it again.
+It is displayed separately as included grace; it does not certify OCR or identity.
+
+Optional `refine_names.py --import-id ... --operator-email ...` rereads existing
+name crops with the printed grid removed using the configured local vision model.
+It resumes using per-record provenance, preserves reviewed and manually edited
+names, uses version checks, and audits every saved update. An unreadable model
+response retains the old reading. Phone and school suggestions are unchanged.
