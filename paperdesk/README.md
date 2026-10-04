@@ -211,3 +211,19 @@ this variable, the existing lightweight OCR path remains active. A failed vision
 load retains that OCR path and records a warning; it does not invent a result.
 Allow at least 4 GiB spare memory for the local worker and measure usage before
 scheduling bulk work. The local vision path has been tested with one process.
+
+### Provisional bulk processing
+
+The Processing desk lists each bulk import and provides a provisional Excel/CSV
+snapshot of all processed students, including unfinished review records. Each row
+states its approval status, source import pages, unresolved answers, checks still
+required and identity/pairing verification state. `?` remains uncertain; detected
+marks are provisional and may be incomplete. Downloading never approves a paper.
+The original approved-result and verified-details exports keep their checks.
+
+For a 1,000-page run, use 500 consecutive front/back student pairs for one exam.
+Check class changes and missing pages before combining source PDFs. Retain a
+manifest mapping combined pages to the original filename/page numbers. The queue
+splits intake into 34 resumable parts (33 × 15 students and one × 5); no review is
+required between parts. Keep the local processing machine awake and connected to
+its data storage. After interruption, restart the worker with the same data path.

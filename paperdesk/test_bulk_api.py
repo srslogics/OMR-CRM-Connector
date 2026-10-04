@@ -18,6 +18,7 @@ class BulkAPI(unittest.TestCase):
         with patch.object(service,'work_loop'), TestClient(service.app) as client:
             self.assertEqual(client.post('/api/bulk-imports',data={'exam_id':'x','pairing_confirmed':'true'},files={'file':('x.pdf',b'bad','application/pdf')}).status_code,401)
             self.assertEqual(client.get('/api/operations').status_code,401)
+            self.assertEqual(client.get('/api/bulk-imports/missing/draft/csv').status_code,401)
             client.post('/api/setup',json={'name':'Internal QA','email':'qa@example.test','password':'synthetic-password'})
             eid=client.post('/api/exams',json={'name':'Bulk QA','class_name':'10'}).json()['id']
             blank=Path(temporary.name)/'blank.pdf';config=create_pdf(blank)
@@ -50,6 +51,16 @@ class BulkAPI(unittest.TestCase):
             self.assertEqual(service.require_row('batches',bid)['status'],'ready')
             queue=client.get('/api/operations?limit=2').json()
             self.assertEqual(queue['counts']['awaiting_team'],3)
+            self.assertEqual(queue['imports'][0]['done'],3)
+            self.assertEqual(queue['imports'][0]['total'],3)
+            draft=client.get('/api/bulk-imports/'+r.json()['id']+'/draft/csv')
+            self.assertEqual(draft.status_code,200)
+            self.assertEqual(draft.text.count('PROVISIONAL - NOT VERIFIED'),3)
+            self.assertIn('Unresolved answers',draft.text)
+            self.assertEqual(client.get('/api/batches/'+bid+'/export/csv').status_code,400)
+            self.assertEqual(client.get('/api/bulk-imports/missing/draft/csv').status_code,404)
+            self.assertEqual(client.get('/api/bulk-imports/'+r.json()['id']+'/draft/xlsx').status_code,200)
+
             detail=client.get('/api/papers/'+queue['items'][0]['id']).json()
             self.assertEqual(detail['source_pages'],[1,2])
             self.assertEqual(detail['source_student'],1)

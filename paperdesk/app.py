@@ -124,13 +124,15 @@ def operations(request:Request,offset:int=Query(0,ge=0),limit:int=Query(25,ge=1,
         jobs=[dict(r) for r in c.execute("SELECT id,name,status,total,done,error FROM batches WHERE status IN ('queued','processing','failed') ORDER BY created,id")]
         used=c.execute('SELECT COALESCE(SUM(size),0) FROM files').fetchone()[0] if REMOTE else None
         rows=c.execute("SELECT p.*,b.name batch_name,e.name exam_name,bp.start_page FROM papers p JOIN batches b ON b.id=p.batch_id JOIN exams e ON e.id=b.exam_id LEFT JOIN bulk_parts bp ON bp.batch_id=b.id WHERE p.status!='approved' ORDER BY b.created,b.id,p.idx LIMIT ? OFFSET ?",(limit+1,offset)).fetchall()
+    with read_db() as c:
+        imports=[dict(r) for r in c.execute('SELECT i.id,i.pages,e.name exam_name,SUM(b.done) done,SUM(b.total) total FROM bulk_imports i JOIN exams e ON e.id=i.exam_id JOIN bulk_parts bp ON bp.import_id=i.id JOIN batches b ON b.id=bp.batch_id GROUP BY i.id,i.pages,e.name,i.created ORDER BY i.created DESC LIMIT 20')]
     pending=sum(max(0,j['total']-j['done']) for j in jobs)
     reservation=pending*EVIDENCE_BYTES_PER_STUDENT
     return {'items':[pending_items(dict(r)) for r in rows[:limit]],
             'next_offset':offset+limit if len(rows)>limit else None,'offset':offset,
             'counts':{'awaiting_team':sum(v for k,v in states.items() if k!='approved'),
                       'approved':states.get('approved',0),'waiting_to_process':pending},
-            'jobs':jobs,'capacity':{'remote':REMOTE,'used_bytes':used,
+            'imports':imports,'jobs':jobs,'capacity':{'remote':REMOTE,'used_bytes':used,
                 'budget_bytes':FILE_BUDGET if REMOTE else None,'reserved_bytes':reservation,
                 'available_bytes':max(0,FILE_BUDGET-used-reservation) if REMOTE else None}}
 
@@ -522,6 +524,22 @@ def process_batch_sequential(b):
                 c.execute('INSERT INTO papers VALUES(?,?,?,?,?,1)',(uuid.uuid4().hex,b['id'],idx,json.dumps(data),'review'))
                 c.execute('UPDATE batches SET done=(SELECT count(*) FROM papers WHERE batch_id=?) WHERE id=?',(b['id'],b['id']))
     with db() as c:c.execute("UPDATE batches SET status='ready' WHERE id=?",(b['id'],))
+
+@app.get('/api/bulk-imports/{id}/draft/{kind}')
+def bulk_draft_export(id:str,kind:str,request:Request):
+    user(request)
+    with read_db() as c:
+        if not c.execute('SELECT id FROM bulk_imports WHERE id=?',(id,)).fetchone():
+            raise HTTPException(404,'Bulk import not found')
+        rows=c.execute('SELECT p.*,bp.start_page FROM bulk_parts bp JOIN papers p ON p.batch_id=bp.batch_id WHERE bp.import_id=? ORDER BY bp.start_page,p.idx',(id,)).fetchall()
+    if not rows:raise HTTPException(400,'No processed papers yet. Try again after the first paper completes.')
+    headers=['Record status','Student number','Import pages','Paper ID']+FIELDS+['Detected marks /100 (provisional)','Unresolved answers','Answers requiring checks','Student details checked','Page pairing checked']+[f'Q{i}' for i in range(1,26)]
+    values=[]
+    for row in rows:
+        d=json.loads(row['data']);score=d['score'];start=row['start_page']+2*row['idx']+1
+        approved=row['status']=='approved' and details_ready(d)
+        values.append(['APPROVED' if approved else 'PROVISIONAL - NOT VERIFIED',(start+1)//2,f'{start}-{start+1}',row['id']]+[d['fields'].get(k,'') for k in FIELDS]+[score['total'],score['unresolved'],score.get('checks_required',score['unresolved']),'Yes' if details_ready(d) else 'No','Yes' if d.get('pairing_verified') else 'No']+d['answers'])
+    return table_download(headers,values,kind,'provisional-bulk-'+id[:8],'Provisional working data')
 
 @app.get('/api/batches/{id}/export/{kind}')
 def export(id:str,kind:str,request:Request):
