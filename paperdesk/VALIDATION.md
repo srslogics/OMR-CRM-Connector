@@ -314,3 +314,31 @@ the same count as the original vision reader. Grid removal did not improve schoo
 or phone results, and regressed mother-mobile readings from 5/7 to 2/7; these fields
 retain their existing reader. This experiment supports a limited name improvement,
 not close-to-perfect extraction or independently measured accuracy on 500 records.
+
+## Identity recognition experiments — 2026-10-05 follow-up
+
+Additional local-only trials tested field-specific prompts (Qwen3-VL 2B and 4B),
+reflowing long name/school strips into three larger rows, splitting phone images
+into two groups, and agreement among preprocessing variants. None established a
+consistent improvement suitable for replacing the current reader. Experimental
+predictions were not applied to the 500 live records.
+
+On six additional bulk papers, 20 of 24 fields had usable assistant visual
+references, including four blank phone fields; four ambiguous names/phones were
+excluded. Field-specific 4B recovered one of three clearly labelled names and
+three of six schools, but phone results regressed relative to the existing
+suggestions. On the separate nine-student reference set it matched three of nine
+names, three of eight schools, five of eight father-mobile fields and three of
+seven mother-mobile fields. These samples are too small to estimate production
+accuracy. References must not be interpreted as client approval.
+
+`identity_benchmark.py` provides exact, per-field evaluation with separate filled,
+blank, ambiguous-excluded, missing-prediction and false-text-on-blank counts. It
+ignores case/whitespace for text and formatting for phone numbers; it never
+accepts similar spelling, a wrong digit, a guessed prefix or a numeric phone that
+may have lost leading zeros. Five regression tests cover these contracts.
+
+A 24-crop private package was prepared locally for a possible managed OCR trial.
+No student data was transmitted to Microsoft, Google or another OCR provider.
+Such a trial requires explicit consent and configured provider access before any
+upload; provider capability documentation alone is not accuracy validation.
