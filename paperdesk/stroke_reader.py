@@ -7,6 +7,32 @@ import cv2
 import numpy as np
 
 
+def competing_mark_veto(detail, width):
+    """A weak second tick can survive at both resolutions below the strong cutoff."""
+    if detail.get('answer') not in ('A','B','C','D'):
+        return detail
+    local_reason = detail.get('local_read',{}).get('reason','').lower()
+    if not any(word in local_reason for word in ('multiple','correction')):
+        return detail
+    primary = detail.get('checkbox_evidence',[])
+    secondary = detail.get('second_resolution',{}).get('checkbox_evidence',[])
+    options = detail.get('option_evidence',[])
+    if not all(len(items)==4 for items in (primary,secondary,options)):
+        return detail
+    unit = max(.6,(width/1100)**2)
+    for i,(a,b,o) in enumerate(zip(primary,secondary,options)):
+        if 'ABCD'[i] == detail['answer'] or not all((a,b,o)):
+            continue
+        if (a['registration_cost'] < .9 and b['registration_cost'] < .9
+            and a['pixels_by_threshold'][0] >= 3*unit
+            and b['pixels_by_threshold'][1] >= 16*unit
+            and b['pixels_by_threshold'][2] >= 10*unit
+            and o['cost'] < .6 and o['v'][1] >= 7*unit and o['v'][2] >= 4*unit):
+            return {**detail,'answer':'?','confidence':'review',
+                    'reason':'Multiple marks or correction supported at two resolutions and option text.'}
+    return detail
+
+
 def stroke_evidence(image, template, boxes, contrast, threshold=30, prepared=None):
     if image.shape != template.shape or len(boxes) != 4:
         return {'answer':'?', 'marks':[]}

@@ -72,6 +72,9 @@ class Integration(unittest.TestCase):
    review['field_review']={k:{'status':'verified' if k=='name' else 'blank','value':'First Test' if k=='name' else ''} for k in FIELDS}
    self.assertEqual(client.put('/api/papers/'+first['id'],json=review).status_code,200)
    self.assertEqual(client.put('/api/papers/'+first['id'],json=review).status_code,409)
+   approved=client.get('/api/papers/'+first['id']).json()
+   self.assertEqual(client.post(f'/api/papers/{first["id"]}/extract-details',params={'version':approved['version']}).status_code,409)
+   self.assertEqual(client.get('/api/papers/'+first['id']).json(),approved)
    self.assertEqual(client.get(f'/api/batches/{bid}/export/xlsx').status_code,200)
    audit=client.get(f'/api/batches/{bid}/review-audit').json()
    self.assertEqual(audit['approved_students'],1)

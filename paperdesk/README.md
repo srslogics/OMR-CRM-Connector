@@ -186,3 +186,28 @@ excluding full identity OCR and hosting overhead. A 512 MiB service has
 insufficient headroom for this tested path. Keep the web process separate and
 run the processing worker on a machine with adequate memory; do not raise
 concurrency on the small web instance to compensate for accuracy work.
+
+### Reader v8 and optional handwriting worker
+
+See [RECOGNITION_V8.md](RECOGNITION_V8.md) for measured improvements and remaining
+errors. The bundled numeric Class 10 ink model runs without extra runtime
+packages, only when the uploaded master and mapping match its trained scope.
+It preserves uncertain answers and does not enable automatic approval.
+
+For the optional **Apple Silicon local worker**, install the usual requirements
+and `requirements-vision.txt` into a dedicated environment, then download the
+pinned public model (this does not upload any papers):
+
+```sh
+python -m pip install -r requirements.txt -r requirements-vision.txt
+python setup_vision.py --directory /absolute/path/to/qwen3-vl-2b
+PAPERDESK_VISION_MODEL_DIR=/absolute/path/to/qwen3-vl-2b PAPERDESK_PROCESS_WORKERS=1 python worker.py
+```
+
+Use the same data/database configuration as the web service. Set
+`PAPERDESK_EMBEDDED_WORKER=0` on that web service when using a separate worker.
+Do not set the vision-model variable on the Render Linux web process. Without
+this variable, the existing lightweight OCR path remains active. A failed vision
+load retains that OCR path and records a warning; it does not invent a result.
+Allow at least 4 GiB spare memory for the local worker and measure usage before
+scheduling bulk work. The local vision path has been tested with one process.

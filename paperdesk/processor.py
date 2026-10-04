@@ -45,7 +45,7 @@ def crop(im,r):
     h,w=im.shape[:2];x,y,rw,rh=r
     return im[max(0,int(y*h)):min(h,int((y+rh)*h)),max(0,int(x*w)):min(w,int((x+rw)*w))]
 
-MARK_READER_VERSION = 7
+MARK_READER_VERSION = 8
 
 def ink_contrast(image):
     """Remove slow lighting/shadow changes without inventing missing strokes."""
@@ -301,7 +301,7 @@ def detect_page_with_retry(source_page, image, template, mapping, page, high_tem
     # dense flow on a full high-resolution page exceeds small worker budgets.
     local_reads = combine_resolution_reads(local_reads, second)
     merged = merge_reads(combined, local_reads)
-    from stroke_reader import stroke_evidence, recover
+    from stroke_reader import stroke_evidence, recover, competing_mark_veto
     stroke_pages = ((image,template),(local,template),(high,high_template))
     contrasts = [(ink_contrast(pixels),ink_contrast(ref)) for pixels,ref in stroke_pages]
     for q,d in merged.items():
@@ -310,7 +310,9 @@ def detect_page_with_retry(source_page, image, template, mapping, page, high_tem
                     for (pixels,ref),prepared in zip(stroke_pages,contrasts)]
         merged[q] = recover(d, readings)
         merged[q]['local_registration'] = registration
-    return merged
+        merged[q] = competing_mark_veto(merged[q], image.shape[1])
+    from learned_marks import recover_page
+    return recover_page(merged, mapping, page, template)
 
 def reread_data(old,detected,key,protected=()):
     """Keep saved human choices and student details when refreshing suggestions."""

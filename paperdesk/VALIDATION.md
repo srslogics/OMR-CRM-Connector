@@ -291,3 +291,12 @@ peak resident memory fell from 824,377,344 to 558,333,952 bytes and runtime from
 21.52 to 12.69 seconds. This is marks-only measurement, not full OCR/hosted load.
 It still exceeds a 512 MiB process allowance; do not represent this reader as
 validated on that instance. Resource requirements remain a deployment constraint.
+
+## Reader v8 and local handwriting comparison — 2026-10-04
+
+See [RECOGNITION_V8.md](RECOGNITION_V8.md) for the new measured results, precise
+sample boundaries and library comparisons. This supersedes the earlier failed
+Apple Vision runtime experiment: a subsequent working local test still did not
+beat the existing OCR. Local browser/API verification confirmed nine completed
+papers and vision alternatives visible in the review workflow; none approved.
+This is not verification of a Render deployment or unattended bulk readiness.

@@ -3,10 +3,23 @@ import unittest
 import cv2
 import numpy as np
 from page_refinement import refine, merge_reads
-from stroke_reader import stroke_evidence, recover
+from stroke_reader import stroke_evidence, recover, competing_mark_veto
 from processor import ink_contrast
 
 class Refinement(unittest.TestCase):
+    def test_weak_second_tick_in_two_resolutions_vetoes_strong_first_choice(self):
+        a={'pixels_by_threshold':[5,4,2],'registration_cost':.3}
+        b={'pixels_by_threshold':[37,24,16],'registration_cost':.5}
+        o={'v':[17,13,10],'cost':.25}
+        detail={'answer':'A','confidence':'strong',
+                'local_read':{'reason':'Ink at multiple option positions'},
+                'checkbox_evidence':[a]*4,
+                'second_resolution':{'checkbox_evidence':[b]*4},
+                'option_evidence':[o]*4}
+        self.assertEqual(competing_mark_veto(detail,1117)['answer'],'?')
+        detail['second_resolution']['checkbox_evidence']=[None]*4
+        self.assertEqual(competing_mark_veto(detail,1117)['answer'],'A')
+
     def test_refinement_rejects_absent_print_and_shape_mismatch(self):
         im=np.full((200,400,3),255,np.uint8)
         self.assertIsNone(refine(im,im,ink_contrast)[0])

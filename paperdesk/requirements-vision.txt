@@ -1,0 +1,2 @@
+# Optional dedicated Apple Silicon worker only; not the Render web process.
+mlx-vlm==0.7.4

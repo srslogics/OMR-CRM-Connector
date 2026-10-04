@@ -383,6 +383,7 @@ async def review(id:str,request:Request):
 @app.post('/api/papers/{id}/extract-details')
 def reread_details(id:str,request:Request,version:int):
     u=user(request);p=require_row('papers',id)
+    if p['status']=='approved':raise HTTPException(409,'Approved papers retain their reviewed student details and cannot be re-read.')
     if p['version']!=version:raise HTTPException(409,'This paper changed. Reload before reading the details again.')
     b=require_row('batches',p['batch_id']);e=require_row('exams',b['exam_id']);conf=json.loads(e['config']);folder=DATA/'batches'/b['id']
     master=cv2.imread(str(materialize(DATA/'exams'/e['id']/'page-0.png')))
@@ -473,6 +474,8 @@ def process_batch(b):
     if stop.is_set():return
     workers=int(os.getenv('PAPERDESK_PROCESS_WORKERS','1'))
     if not 1<=workers<=4:raise ValueError('PAPERDESK_PROCESS_WORKERS must be between 1 and 4')
+    if os.getenv('PAPERDESK_VISION_MODEL_DIR','').strip() and workers!=1:
+        raise ValueError('Local vision OCR requires one processing worker to keep model memory bounded.')
     if workers==1:return process_batch_sequential(b)
     from concurrent.futures import ProcessPoolExecutor, wait, FIRST_COMPLETED
     from multiprocessing import get_context

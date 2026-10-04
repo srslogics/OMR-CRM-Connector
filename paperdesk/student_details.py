@@ -176,7 +176,9 @@ def extract_field(image, template, box, key, directory, prefix):
         state, reason = 'incomplete', 'Not a complete 10-digit number. Read the scan; do not guess missing digits.'
     elif len(unique) > 1:
         state, reason = 'conflict', 'The reading methods disagree. Compare the alternatives with the original.'
-    return {'suggested': chosen, 'candidates': unique, 'state': state, 'reason': reason, 'engine': engine_name}
+    reading = {'suggested': chosen, 'candidates': unique, 'state': state, 'reason': reason, 'engine': engine_name}
+    from vision_ocr import transcribe, merge_reading
+    return merge_reading(reading, transcribe(cut), key)
 
 def extract_details(image, template, mapping, directory, prefix):
     readings = {key: empty_reading() for key in FIELDS}
